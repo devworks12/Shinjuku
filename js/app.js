@@ -89,7 +89,7 @@ const labels = model.labels.map((L) => {
   document.body.appendChild(el);
   return { ...L, el, vis: false, w: L.text.length * 11 + 16, route: false };
 });
-const PRIO = { exit: 0, plat: 1, gate: 2, bldg: 3 };
+const PRIO = { exit: 0, plat: 1, gate: 2, street: 3, bldg: 4 };
 const _v = new THREE.Vector3();
 function updateLabels() {
   const w = innerWidth, h = innerHeight, pov = state.mode === 'pov';
@@ -103,6 +103,7 @@ function updateLabels() {
       else if (L.cls === 'plat') show = dist < 650;
       else if (L.cls === 'gate') show = dist < (state.routes.length ? 160 : 260);
       else if (L.cls === 'bldg') show = dist > 250 && dist < 1300;
+      else if (L.cls === 'street') show = dist > 120 && dist < 900 && (state.focus == null || state.focus >= 0);
       if (state.focus != null && L.lv != null && Math.round(L.lv) > state.focus) show = false;
     }
     let sx = 0, sy = 0;
@@ -444,6 +445,7 @@ function stopPov() {
   $('#pov').hidden = true;
   controls.enabled = true;
   model.setPov(false);
+  model.ground.visible = true;
   povRouteVisuals(false);
   scene.background.copy(BG_PLAN);
   scene.fog.color.copy(BG_PLAN);
@@ -492,11 +494,17 @@ function stepPov(now) {
   const pos = r.at(s);
   _tgt.copy(r.at(Math.min(r.dist, s + 6)));
   if (r.dist - s < 3) _tgt.copy(r.at(r.dist)).add(r.dirAt(r.dist).multiplyScalar(6));
-  _tgt.y += EYE - 0.15;
+  // 上下の向きは控えめに（階段で真下を向かないように）
+  const hd = Math.hypot(_tgt.x - pos.x, _tgt.z - pos.z) || 1;
+  const dyMax = hd * 0.32;
+  _tgt.y = pos.y + Math.max(-dyMax, Math.min(dyMax, _tgt.y - pos.y)) + EYE - 0.1;
   if (!pv.look) pv.look = _tgt.clone();
   pv.look.lerp(_tgt, 1 - Math.exp(-dt * 4));
   camera.position.set(pos.x, pos.y + EYE, pos.z);
   camera.lookAt(pv.look);
+  // 地下にいるときは地上の建物を隠す（天井の切れ目から見えないように）
+  const above = pos.y > -1;
+  if (pv.above !== above) { pv.above = above; for (const b of model.buildings || []) b.visible = above; model.ground.visible = above; }
   const nav = r.navAt(s);
   $('#navIcon').textContent = nav.icon;
   $('#navIcon').className = nav.cls || '';
@@ -572,8 +580,9 @@ requestAnimationFrame(loop);
 $('#loading').style.opacity = 0;
 setTimeout(() => $('#loading').remove(), 450);
 
-if (location.hash.includes('>')) {
-  const [f, t] = location.hash.slice(1).split('>').map(decodeURIComponent);
+const hash = decodeURIComponent(location.hash.slice(1));
+if (hash.includes('>')) {
+  const [f, t] = hash.split('>');
   if (opMeta(f) && opMeta(t)) { setPick('from', f); setPick('to', t); go(false); }
 }
 window.__app = { state, data, camera, controls, scene, renderer, composer, bloom, go, setPick, startPov, stopPov, fitRoute, model, graph, selectRoute };

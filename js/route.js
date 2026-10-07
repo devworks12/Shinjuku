@@ -78,6 +78,9 @@ export class Graph {
 
   P(i) { const N = this.d.nodes; return this.vec(N[i * 3], N[i * 3 + 1], N[i * 3 + 2]); }
 
+  // 案内に使う階（公式の階表記に読み替え）
+  dlv(i) { const v = this.d.disp && this.d.disp[i]; return v != null ? v : this.d.nodeLv[i]; }
+
   // 1辺を歩く秒数
   edgeTime(e, a, b, bf) {
     const k = this.kind[e], L = this.len[e];
@@ -256,7 +259,7 @@ export class Graph {
       const L = Math.hypot(dx, dz) || 1;
       return self.vec(dx / L, 0, dz / L);
     };
-    res.lvAt = (s) => d.nodeLv[path[seg(s)]];
+    res.lvAt = (s) => self.dlv(path[seg(s)]);
     res.sAtVtime = (t) => {
       t = Math.max(0, Math.min(res.vtime, t));
       let lo = 0, hi = vcum.length - 1;
@@ -312,18 +315,38 @@ export class Graph {
     let lastGate = { s: -1e9, name: '' };
     for (const rn of runs) {
       const s0 = cum[rn.i], s1 = cum[rn.j];
-      const lv0 = d.nodeLv[path[rn.i]], lv1 = d.nodeLv[path[rn.j]];
+      const lv0 = this.dlv(path[rn.i]), lv1 = this.dlv(path[rn.j]);
       if (rn.v) {
+        // 階段の途中にある改札（データ上の境目）も拾う
+        const vgates = [];
+        for (let q = rn.i + 1; q <= rn.j; q++) {
+          if (!this.gate.has(path[q])) continue;
+          const z0 = d.zone[path[Math.max(0, q - 1)]], z1 = d.zone[path[Math.min(path.length - 1, q + 1)]];
+          if (z0 === z1) continue;
+          const name = this.gate.get(path[q]) || '改札';
+          if (cum[q] - lastGate.s < 25 && name === lastGate.name) { lastGate.s = cum[q]; continue; }
+          lastGate = { s: cum[q], name };
+          vgates.push({ q, name, sub: this._zoneSub(z0, z1) });
+          gatesUsed.push(name);
+        }
+        const pushVGates = () => {
+          for (const g of vgates) {
+            steps.push({ icon: '⇥', text: `${g.name}を通る`, sub: g.sub, i: g.q, cls: 'gate' });
+            segs.push({ s0: cum[rn.j], s1: cum[rn.j] + 0.01, icon: '⇥', text: `${g.name}を通る`, sub: g.sub, cls: 'gate', type: 'g' });
+          }
+        };
         const y0 = N[path[rn.i] * 3 + 1], y1 = N[path[rn.j] * 3 + 1];
         const up = y1 > y0;
         const what = rn.k === KIND.ESC ? 'エスカレーター' : rn.k === KIND.ELEV ? 'エレベーター' : rn.k === KIND.RAMP ? 'スロープ' : '階段';
         if (Math.round(lv0) === Math.round(lv1) && rn.k !== KIND.ELEV) {
           segs.push({ s0, s1, icon: up ? '↗' : '↘', text: `${what}を${up ? '上がる' : '下りる'}`, cls: 'vert', type: 'v' });
+          pushVGates();
           continue;
         }
         const text = `${what}で${floorJP(lv1)}へ${rn.k === KIND.ELEV ? '' : up ? '上がる' : '下りる'}`.replace(/へ$/, 'へ');
         segs.push({ s0, s1, icon: up ? '↗' : '↘', text, cls: 'vert', type: 'v' });
         steps.push({ icon: up ? '⇡' : '⇣', text, sub: `${floorJP(lv0)} → ${floorJP(lv1)}`, i: rn.i, cls: 'vert', dist: s1 - s0 });
+        pushVGates();
         continue;
       }
       // 歩き: 改札・曲がり角のイベント

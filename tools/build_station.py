@@ -489,7 +489,7 @@ def classify(i):
         if not name:
             continue
         hit = [o for o, pres in C.OP_PREFIX.items() if any(name.startswith(p) for p in pres)]
-        if hit and "改札外" not in name.split(";")[0]:
+        if hit and "改札外" not in name.split(";")[0] and not re.search(r"出入口|方面|モール", name):
             ops.update(hit)
         else:
             pub = True
@@ -697,6 +697,9 @@ for p, op in [(p, o) for p in plats for o in p["ops"]]:
                 continue  # 他社の構内
             if pub_v and not ops_v & my:
                 continue  # 改札外の名前
+            if op in C.ZONE_LIMITS and not any(x0 <= vnodes[v][0] <= x1 and z0 <= vnodes[v][2] <= z1
+                                               for x0, x1, z0, z1 in C.ZONE_LIMITS[op]):
+                continue  # 公式構内図で見た改札内の範囲の外
             seen.add(v)
             q.append(v)
 
@@ -909,6 +912,10 @@ for (a, b) in out_ekeys:
 out_gates = []
 for g in gates:
     g["name"] = C.FINAL_GATE_NAMES.get(g["name"], g["name"])
+    gx, gy, gz, glv = vnodes[g["n"]]
+    for x, z, lv, rad, nm in C.GATE_NAME_AT:
+        if abs(glv - lv) < 0.6 and math.hypot(gx - x, gz - z) < rad:
+            g["name"] = nm
     if g["n"] in remap:
         out_gates.append(dict(n=remap[g["n"]], name=g["name"]))
 
@@ -1062,6 +1069,12 @@ for n, (la, lo, t) in nodes.items():
     shops += [round(x, 1), round(C.level_height(lv), 1), round(z, 1), lv]
 
 levels = sorted({round(v) for v in out_lv})
+out_disp = {}
+for i, o in enumerate(used):
+    x, y, z, lv = vnodes[o]
+    for x0, x1, z0, z1, mp in C.DISPLAY_LEVEL:
+        if x0 <= x <= x1 and z0 <= z <= z1 and round(lv) in mp and abs(lv - round(lv)) < 0.05:
+            out_disp[i] = mp[round(lv)]
 
 # ------------------------------------------------------------------ 通路の形（階ごとのマス目）
 # 駅の向きに合わせて回したマス目（RES m 角）に、歩ける床(1)・吹き抜け/ホーム/階段口(2)を塗る。
@@ -1308,7 +1321,7 @@ out = dict(
     exits=[dict(key=e["key"], name=e["name"], sub=e["sub"], n=remap[e["n"]]) for e in exits if e["n"] in remap],
     presets=[list(p) for p in C.PRESETS],
     buildings=buildings, roads=roads, rails=rails, shops=shops,
-    ename=out_ename, ein=out_ein, names=names_list, grid=grid_out, signs=signs,
+    ename=out_ename, ein=out_ein, names=names_list, grid=grid_out, signs=signs, disp=out_disp,
 )
 dst = ROOT / "data/station.json"
 dst.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")))

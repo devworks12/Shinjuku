@@ -61,7 +61,7 @@ export function textTex(lines, opt = {}) {
   const W = opt.w || 512, H = opt.h || 128;
   return canvasTex(W, H, (g) => {
     g.fillStyle = opt.bg || '#1d2a44'; g.fillRect(0, 0, W, H);
-    if (opt.stripe) { g.fillStyle = opt.stripe; g.fillRect(0, 0, 18, H); }
+    if (opt.stripe) { g.fillStyle = opt.stripe; g.fillRect(0, 0, Math.round(H * 0.14), H); }
     g.fillStyle = opt.fg || '#ffffff';
     g.textBaseline = 'middle';
     const n = lines.length;
@@ -69,10 +69,10 @@ export function textTex(lines, opt = {}) {
       const size = i === 0 ? (opt.size || 54) : (opt.size2 || 34);
       g.font = `700 ${size}px "Zen Kaku Gothic New","Hiragino Sans","Noto Sans JP",sans-serif`;
       let tw = g.measureText(t).width;
-      const maxW = W - (opt.stripe ? 50 : 30);
+      const maxW = W - (opt.stripe ? H * 0.4 : 24);
       if (tw > maxW) { g.font = `700 ${Math.floor(size * maxW / tw)}px "Zen Kaku Gothic New","Hiragino Sans",sans-serif`; tw = maxW; }
       const y = n === 1 ? H / 2 : H * (i === 0 ? 0.36 : 0.74);
-      g.fillText(t, opt.stripe ? 34 : (W - tw) / 2, y);
+      g.fillText(t, opt.stripe ? H * 0.26 : (W - tw) / 2, y);
     });
   }, false);
 }
@@ -344,23 +344,25 @@ export class StationModel {
       }
       // 側壁（階段は天井まで、エスカレーターは手すり＋ガラス）
       const nx = Math.cos(yaw), nz = -Math.sin(yaw); // 横方向
+      // 側壁: 上の階では腰壁(1.1m)、下に行くほど天井まで
+      const hTop = k === KIND.ESC ? 1.0 : 1.1, hBot = k === KIND.ESC ? 1.0 : WALL_H;
       for (const sgn of [-1, 1]) {
         const ox = nx * sgn * (w / 2 + 0.05), oz = nz * sgn * (w / 2 + 0.05);
-        const h = k === KIND.ESC ? 1.0 : WALL_H;
         const arr = k === KIND.ESC ? escSides : sideWalls;
         const t0 = [top.x + ox, top.y, top.z + oz], b0 = [bot.x + ox, bot.y, bot.z + oz];
-        arr.push(t0[0], t0[1], t0[2], b0[0], b0[1], b0[2], b0[0], b0[1] + h, b0[2],
-          t0[0], t0[1], t0[2], b0[0], b0[1] + h, b0[2], t0[0], t0[1] + h, t0[2]);
+        const tY = top.y + hTop, bY = Math.max(bot.y + hBot, bot.y + 1.0);
+        arr.push(t0[0], t0[1] - 0.6, t0[2], b0[0], b0[1], b0[2], b0[0], bY, b0[2],
+          t0[0], t0[1] - 0.6, t0[2], b0[0], bY, b0[2], t0[0], tY, t0[2]);
         if (k !== KIND.ESC) {
-          const L = Math.hypot(run, dy);
-          sideUv.push(0, 0, L, 0, L, h, 0, 0, L, h, 0, h);
+          const L = Math.hypot(run, dy) * 2;
+          sideUv.push(0, 0, L, 0, L, (bY - bot.y) * 2, 0, 0, L, (bY - bot.y) * 2, 0, (tY - top.y + 0.6) * 2);
         }
       }
-      if (k === KIND.STAIRS) {
-        // 斜めの天井
-        const lx = nx * w / 2, lz = nz * w / 2;
-        ceil.push(top.x - lx, top.y + WALL_H, top.z - lz, bot.x + lx, bot.y + WALL_H, bot.z + lz, bot.x - lx, bot.y + WALL_H, bot.z - lz,
-          top.x - lx, top.y + WALL_H, top.z - lz, top.x + lx, top.y + WALL_H, top.z + lz, bot.x + lx, bot.y + WALL_H, bot.z + lz);
+      if (k === KIND.STAIRS && dy > 2.6) {
+        // 斜めの天井（上の階の床下から、下の階の天井高さへ）
+        const lx = nx * w / 2, lz = nz * w / 2, yT = top.y - 0.25, yB = bot.y + WALL_H;
+        ceil.push(top.x - lx, yT, top.z - lz, bot.x + lx, yB, bot.z + lz, bot.x - lx, yB, bot.z - lz,
+          top.x - lx, yT, top.z - lz, top.x + lx, yT, top.z + lz, bot.x + lx, yB, bot.z + lz);
         const L = Math.hypot(run, dy) / 4;
         ceilUv.push(0, 0, 1, L, 0, L, 0, 0, 1, 0, 1, L);
       }
@@ -419,7 +421,7 @@ export class StationModel {
         const L = Math.hypot(x2 - x1, z2 - z1);
         if (L < 6) continue; // 短い辺（ホームの端）は付けない
         const ix = (-(z2 - z1) / L) * sgn, iz = ((x2 - x1) / L) * sgn; // 内向き
-        const o0 = 0.6, o1 = 0.95, y = p.y + 0.012;
+        const o0 = 0.55, o1 = 0.85, y = p.y + 0.012;
         const A = [x1 + ix * o0, z1 + iz * o0], B = [x2 + ix * o0, z2 + iz * o0], Cc = [x2 + ix * o1, z2 + iz * o1], D = [x1 + ix * o1, z1 + iz * o1];
         edge.push(A[0], y, A[1], B[0], y, B[1], Cc[0], y, Cc[1], A[0], y, A[1], Cc[0], y, Cc[1], D[0], y, D[1]);
       }
@@ -564,8 +566,16 @@ export class StationModel {
 
   _hangSign(lines, pos, yaw, opt = {}) {
     const w = opt.w || 2.4, h = w / 4;
-    const tex = textTex(lines, { stripe: opt.stripe, bg: opt.bg || '#1d2a44', w: 512, h: 128, size: lines.length > 1 ? 50 : 62 });
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, toneMapped: false }));
+    const key = lines.join('|') + (opt.stripe || '') + (opt.bg || '') + (opt.fg || '');
+    this._signMats ||= new Map();
+    let mat = this._signMats.get(key);
+    if (!mat) {
+      const tex = textTex(lines, { stripe: opt.stripe, bg: opt.bg || '#1d2a44', fg: opt.fg, w: 384, h: 96, size: lines.length > 1 ? 38 : 46, size2: 26 });
+      mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, toneMapped: false });
+      this._signMats.set(key, mat);
+    }
+    this.signCount = (this.signCount || 0) + 1;
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
     m.position.copy(pos);
     m.rotation.y = yaw;
     (opt.group || this.root).add(m);
@@ -581,7 +591,36 @@ export class StationModel {
       const line = lineBy[p.lines[0]];
       const names = [...new Set(p.lines.map((k) => lineBy[k]?.name).filter(Boolean))].join('・');
       const yaw = Math.atan2(s.dx, s.dz);
-      this._hangSign([`${p.short} ${p.label}`, names || ''], new THREE.Vector3(s.x, s.y + 2.6, s.z), yaw, { stripe: line?.color, w: 2.8 });
+      const L = Math.hypot(s.dx, s.dz) || 1;
+      const pos = new THREE.Vector3(s.x - (s.dx / L) * 2.2, s.y + 2.7, s.z - (s.dz / L) * 2.2);
+      this._hangSign([`${p.short} ${p.label}`, names || ''], pos, yaw, { stripe: line?.color, w: 2.8 });
+    }
+    // 通路名の看板（屋内）と通りの名前（屋外、模型のラベル）
+    if (d.ename) {
+      const N = d.nodes, E = d.edges;
+      const placed = new Map();
+      const streetBest = new Map();
+      for (let e = 0; e < E.length / 3; e++) {
+        const ni = d.ename[e];
+        if (ni < 0) continue;
+        const a = E[e * 3], b = E[e * 3 + 1];
+        const ax = N[a * 3], ay = N[a * 3 + 1], az = N[a * 3 + 2], bx = N[b * 3], bz = N[b * 3 + 2];
+        const L = Math.hypot(bx - ax, bz - az);
+        const name = d.names[ni];
+        if (!d.ein[e]) {
+          const cur = streetBest.get(ni);
+          if (!cur || L > cur.L) streetBest.set(ni, { L, pos: new THREE.Vector3((ax + bx) / 2, 1, (az + bz) / 2) });
+          continue;
+        }
+        if (L < 6 || Math.abs(ay - N[b * 3 + 1]) > 0.3) continue;
+        const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+        const list = placed.get(ni) || [];
+        if (list.some(([x, y, z]) => Math.hypot(x - mx, z - mz) < 70 && Math.abs(y - ay) < 2)) continue;
+        list.push([mx, ay, mz]);
+        placed.set(ni, list);
+        this._hangSign([name], new THREE.Vector3(mx, ay + 2.6, mz), Math.atan2(bx - ax, bz - az), { bg: '#f4f5f7', fg: '#1b2433', w: Math.min(4.5, Math.max(2.2, name.length * 0.42)) });
+      }
+      for (const [ni, v] of streetBest) if (v.L > 8) this.labels.push({ text: d.names[ni], pos: v.pos, cls: 'street', lv: 0 });
     }
     for (const x of d.exits) {
       const N = d.nodes;
