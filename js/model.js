@@ -168,6 +168,12 @@ export class StationModel {
     return this.levels.get(k);
   }
 
+  lvOfY(y) {
+    let best = 0, bd = 1e9;
+    for (const l of this.d.levels) { const dd = Math.abs(l.y - y); if (dd < bd) { bd = dd; best = l.lv; } }
+    return best;
+  }
+
   // マス目の値（ワールド座標で問い合わせ）
   cellAt(lv, x, z) {
     const G = this._grids.get(Math.round(lv));
@@ -287,7 +293,12 @@ export class StationModel {
   _buildVertical() {
     const d = this.d, N = d.nodes, E = d.edges;
     const P = (i) => new THREE.Vector3(N[i * 3], N[i * 3 + 1], N[i * 3 + 2]);
-    const steps = [], noses = [], escs = [], escSides = [], sideWalls = [], sideUv = [], ceil = [], ceilUv = [];
+    const bins = new Map();
+    const bin = (lv) => {
+      const k = Math.round(lv);
+      if (!bins.has(k)) bins.set(k, { steps: [], noses: [], escs: [], escSides: [], sideWalls: [], sideUv: [], ceil: [], ceilUv: [], elev: [], elevTop: [] });
+      return bins.get(k);
+    };
     const elevDone = new Set();
     const box = (arr, cx, cy, cz, sx, sy, sz, yaw) => {
       const gg = new THREE.BoxGeometry(sx, sy, sz);
@@ -297,19 +308,20 @@ export class StationModel {
     };
     for (let e = 0; e < E.length / 3; e++) {
       const a = E[e * 3], b = E[e * 3 + 1], k = E[e * 3 + 2];
+      const B = bin(Math.min(d.nodeLv[a], d.nodeLv[b]));
+      const { steps, noses, escs, escSides, sideWalls, sideUv, ceil, ceilUv } = B;
       if (k === KIND.ELEV) {
         const pa = P(a), pb = P(b);
         const key = Math.round(pa.x * 2) + ',' + Math.round(pa.z * 2);
         const y0 = Math.min(pa.y, pb.y), y1 = Math.max(pa.y, pb.y) + WALL_H;
         const g = new THREE.BoxGeometry(2.0, y1 - y0, 2.0);
         g.translate(pa.x, (y0 + y1) / 2, pa.z);
-        const m = new THREE.Mesh(g, this.mats.elev);
-        this.root.add(m);
+        B.elev.push(g);
         if (!elevDone.has(key)) {
           elevDone.add(key);
-          const f = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.15, 2.2), this.mats.elevFrame);
-          f.position.set(pa.x, y1, pa.z);
-          this.root.add(f);
+          const f = new THREE.BoxGeometry(2.2, 0.15, 2.2);
+          f.translate(pa.x, y1, pa.z);
+          B.elevTop.push(f);
         }
         continue;
       }
@@ -367,30 +379,35 @@ export class StationModel {
         ceilUv.push(0, 0, 1, L, 0, L, 0, 0, 1, 0, 1, L);
       }
     }
-    const add = (geos, mat) => {
-      if (!geos.length) return;
-      const m = new THREE.Mesh(mergeGeometries(geos, false), mat);
-      geos.forEach((g) => g.dispose());
-      this.root.add(m);
-      return m;
-    };
-    add(steps, this.mats.step);
-    add(noses, this.mats.stepNose);
-    add(escs, this.mats.esc);
-    const flat = (pos, uv, mat) => {
-      if (!pos.length) return null;
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-      if (uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-      fixNormals(g);
-      const m = new THREE.Mesh(g, mat);
-      this.root.add(m);
-      return m;
-    };
-    flat(sideWalls, sideUv, this.mats.wall);
-    flat(escSides, null, this.mats.escSide);
-    const c = flat(ceil, ceilUv, this.mats.ceil);
-    if (c) { c.visible = false; this.ceilings.push(c); }
+    for (const [lv, B] of bins) {
+      const grp = this.level(lv).group;
+      const add = (geos, mat) => {
+        if (!geos.length) return null;
+        const m = new THREE.Mesh(mergeGeometries(geos, false), mat);
+        geos.forEach((g) => g.dispose());
+        grp.add(m);
+        return m;
+      };
+      const flat = (pos, uv, mat) => {
+        if (!pos.length) return null;
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        if (uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+        fixNormals(g);
+        const m = new THREE.Mesh(g, mat);
+        grp.add(m);
+        return m;
+      };
+      add(B.steps, this.mats.step);
+      add(B.noses, this.mats.stepNose);
+      add(B.escs, this.mats.esc);
+      add(B.elev, this.mats.elev);
+      add(B.elevTop, this.mats.elevFrame);
+      flat(B.sideWalls, B.sideUv, this.mats.wall);
+      flat(B.escSides, null, this.mats.escSide);
+      const c = flat(B.ceil, B.ceilUv, this.mats.ceil);
+      if (c) { c.visible = false; this.ceilings.push(c); }
+    }
   }
 
   _buildPlatforms() {
@@ -496,8 +513,19 @@ export class StationModel {
         }
       }
     }
-    if (geos.length) this.root.add(new THREE.Mesh(mergeGeometries(geos, false), this.mats.ballast));
-    if (steel.length) this.root.add(new THREE.Mesh(mergeGeometries(steel, false), this.mats.steel));
+    const byLv = (arr) => {
+      const m = new Map();
+      for (const g of arr) {
+        g.computeBoundingBox();
+        const y = g.boundingBox.min.y + 1;
+        let best = 0, bd = 1e9;
+        for (const l of this.d.levels) { const dd = Math.abs(l.y - y); if (dd < bd) { bd = dd; best = l.lv; } }
+        (m.get(best) || m.set(best, []).get(best)).push(g);
+      }
+      return m;
+    };
+    for (const [lv, arr] of byLv(geos)) this.level(lv).group.add(new THREE.Mesh(mergeGeometries(arr, false), this.mats.ballast));
+    for (const [lv, arr] of byLv(steel)) this.level(lv).group.add(new THREE.Mesh(mergeGeometries(arr, false), this.mats.steel));
   }
 
   // 改札: 通路を横切るように改札機を並べ、上に名前の看板
@@ -509,7 +537,8 @@ export class StationModel {
       (adj.get(a) || adj.set(a, []).get(a)).push(b);
       (adj.get(b) || adj.set(b, []).get(b)).push(a);
     }
-    const machines = [], tops = [], lights = [];
+    const gb = new Map();
+    const gbin = (lv) => { const k = Math.round(lv); if (!gb.has(k)) gb.set(k, { machines: [], tops: [], lights: [] }); return gb.get(k); };
     const placed = [];
     const opColor = { 1: '#2f8f3a', 2: '#1e6fbf', 4: '#c1186a', 8: '#d4202b', 16: '#2a7f3a', 32: '#2e6db4' };
     for (const gt of d.gates) {
@@ -538,6 +567,7 @@ export class StationModel {
       const reach = (s) => { let t = 0; for (; t < 7; t += 0.4) if (this.cellAt(lv, x + cx * t * s, z + cz * t * s) !== 1 && Math.abs(lv) > 0.1) break; return Math.max(1.2, Math.min(t, 7)); };
       const r1 = reach(1), r2 = reach(-1);
       const yaw = Math.atan2(dx, dz);
+      const { machines, tops, lights } = gbin(lv);
       const count = Math.max(2, Math.round((r1 + r2) / 0.95));
       for (let i = 0; i <= count; i++) {
         const s = -r2 + (i / count) * (r1 + r2);
@@ -555,13 +585,16 @@ export class StationModel {
       const name = gt.name || '改札';
       const bit = d.zone[n] || 0;
       const col = Object.entries(opColor).find(([b]) => bit & +b)?.[1] || '#24324a';
-      this._hangSign([name], new THREE.Vector3(x, y + 2.55, z), yaw, { bg: col, w: Math.min(5, Math.max(2.4, name.length * 0.45)), lv });
+      this._hangSign([name], new THREE.Vector3(x, y + 2.55, z), yaw, { bg: col, w: Math.min(5, Math.max(2.4, name.length * 0.45)), group: this.level(lv).group });
       this.labels.push({ text: name, pos: new THREE.Vector3(x, y + 3.2, z), cls: 'gate', lv, node: n });
     }
-    const add = (geos, mat) => { if (geos.length) this.root.add(new THREE.Mesh(mergeGeometries(geos, false), mat)); };
-    add(machines, this.mats.gate);
-    add(tops, this.mats.gateTop);
-    add(lights, this.mats.gateLight);
+    for (const [lv, B] of gb) {
+      const grp = this.level(lv).group;
+      const add = (geos, mat) => { if (geos.length) grp.add(new THREE.Mesh(mergeGeometries(geos, false), mat)); };
+      add(B.machines, this.mats.gate);
+      add(B.tops, this.mats.gateTop);
+      add(B.lights, this.mats.gateLight);
+    }
   }
 
   _hangSign(lines, pos, yaw, opt = {}) {
@@ -593,7 +626,7 @@ export class StationModel {
       const yaw = Math.atan2(s.dx, s.dz);
       const L = Math.hypot(s.dx, s.dz) || 1;
       const pos = new THREE.Vector3(s.x - (s.dx / L) * 2.2, s.y + 2.7, s.z - (s.dz / L) * 2.2);
-      this._hangSign([`${p.short} ${p.label}`, names || ''], pos, yaw, { stripe: line?.color, w: 2.8 });
+      this._hangSign([`${p.short} ${p.label}`, names || ''], pos, yaw, { stripe: line?.color, w: 2.8, group: this.level(this.lvOfY(s.y)).group });
     }
     // 通路名の看板（屋内）と通りの名前（屋外、模型のラベル）
     if (d.ename) {
@@ -618,7 +651,7 @@ export class StationModel {
         if (list.some(([x, y, z]) => Math.hypot(x - mx, z - mz) < 70 && Math.abs(y - ay) < 2)) continue;
         list.push([mx, ay, mz]);
         placed.set(ni, list);
-        this._hangSign([name], new THREE.Vector3(mx, ay + 2.6, mz), Math.atan2(bx - ax, bz - az), { bg: '#f4f5f7', fg: '#1b2433', w: Math.min(4.5, Math.max(2.2, name.length * 0.42)) });
+        this._hangSign([name], new THREE.Vector3(mx, ay + 2.6, mz), Math.atan2(bx - ax, bz - az), { bg: '#f4f5f7', fg: '#1b2433', w: Math.min(4.5, Math.max(2.2, name.length * 0.42)), group: this.level(d.nodeLv[a]).group });
       }
       for (const [ni, v] of streetBest) if (v.L > 8) this.labels.push({ text: d.names[ni], pos: v.pos, cls: 'street', lv: 0 });
     }
@@ -701,6 +734,8 @@ export class StationModel {
     for (const b of this.buildings || []) b.material.opacity = on ? 0.9 : (b.isLineSegments ? 0.18 : b.material === this.mats.landmark ? 0.28 : 0.12);
     this.mats.building.depthWrite = on; this.mats.landmark.depthWrite = on;
     this.mats.ground.opacity = on ? 1 : 0.72;
+    this.mats.ground.color.set(on ? 0x8a9099 : 0x23272e);
+    this.mats.road.color.set(on ? 0x5a6069 : 0x3a3f47);
     this.mats.ground.depthWrite = on;
     this.mats.road.depthWrite = on;
   }

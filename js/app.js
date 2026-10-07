@@ -35,7 +35,7 @@ const canvas = $('#stage');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.0;
+renderer.toneMappingExposure = 1.25;
 const scene = new THREE.Scene();
 const BG_PLAN = new THREE.Color(0x0b0f16), BG_POV = new THREE.Color(0xdde1e6);
 scene.background = BG_PLAN.clone();
@@ -436,6 +436,7 @@ function startPov() {
   scene.fog.near = 40; scene.fog.far = 220;
   camera.fov = 70; camera.updateProjectionMatrix();
   bloom.strength = 0.35;
+  renderer.toneMappingExposure = 1.0;
 }
 function stopPov() {
   if (state.mode !== 'pov') return;
@@ -452,6 +453,7 @@ function stopPov() {
   scene.fog.near = 700; scene.fog.far = 2200;
   camera.fov = 45; camera.updateProjectionMatrix();
   bloom.strength = 0.7;
+  renderer.toneMappingExposure = 1.25;
   setFocus(state.focus);
 }
 function togglePause() {

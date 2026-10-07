@@ -1181,6 +1181,10 @@ for e in range(len(out_ekeys)):
         pass
     if WIDE.search(t.get("name", "")):
         w = max(w, C.WIDE_W)
+    for pat, ww in C.WIDTH_RULES:
+        if re.search(pat, t.get("name", "")):
+            w = max(w, ww)
+            break
     w = max(2.5, min(w, 14))
     paint_segment(masks[L], pa, pb, w / 2, 1)
 
