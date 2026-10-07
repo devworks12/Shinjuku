@@ -285,7 +285,7 @@ function selectRoute(i, fit) {
   buildRouteMesh(r);
   renderSteps(r);
   const onRoute = new Set(r.nodes);
-  for (const L of labels) L.route = L.cls === 'gate' && L.node != null && onRoute.has(L.node);
+  for (const L of labels) L.route = L.cls === 'gate' && (L.nodes || []).some((n) => onRoute.has(n));
   if (fit) fitRoute();
 }
 function renderSteps(r) {

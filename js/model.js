@@ -586,7 +586,12 @@ export class StationModel {
       const bit = d.zone[n] || 0;
       const col = Object.entries(opColor).find(([b]) => bit & +b)?.[1] || '#24324a';
       this._hangSign([name], new THREE.Vector3(x, y + 2.55, z), yaw, { bg: col, w: Math.min(5, Math.max(2.4, name.length * 0.45)), group: this.level(lv).group });
-      this.labels.push({ text: name, pos: new THREE.Vector3(x, y + 3.2, z), cls: 'gate', lv, node: n });
+      if (!this.labels.some((L) => L.cls === 'gate' && L.text === name && L.pos.distanceTo(new THREE.Vector3(x, y + 3.2, z)) < 40)) {
+        this.labels.push({ text: name, pos: new THREE.Vector3(x, y + 3.2, z), cls: 'gate', lv, node: n, nodes: [n] });
+      } else {
+        const L = this.labels.find((L) => L.cls === 'gate' && L.text === name && L.pos.distanceTo(new THREE.Vector3(x, y + 3.2, z)) < 40);
+        L.nodes.push(n);
+      }
     }
     for (const [lv, B] of gb) {
       const grp = this.level(lv).group;
