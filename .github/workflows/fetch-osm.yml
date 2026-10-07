@@ -36,7 +36,9 @@ jobs:
           osmium cat data/raw/shinjuku.osm.pbf -o data/raw/shinjuku.osm.gz --overwrite
           ls -la data/raw
       - name: Build station.json
-        run: python3 tools/build_station.py --report
+        run: |
+          pip install numpy matplotlib
+          python3 tools/build_station.py --report
       - name: Commit data
         run: |
           rm -f kanto.osm.pbf
