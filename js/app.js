@@ -160,6 +160,7 @@ if (data.rails?.length) {
   }
 }
 
+const elevMats = [];
 // 歩行ネットワーク（帯）
 function ribbon(a, b, w) {
   const dx = b.x - a.x, dz = b.z - a.z;
@@ -224,6 +225,7 @@ function ribbon(a, b, w) {
     const y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
     const g = new THREE.BoxGeometry(2.4, y1 - y0 + 2.4, 2.4);
     const m = new THREE.MeshBasicMaterial({ color: 0xff6fb5, transparent: true, opacity: 0.32, depthWrite: false });
+    elevMats.push(m);
     const box = new THREE.Mesh(g, m);
     box.position.set(a.x, (y0 + y1) / 2 + 1.2, a.z);
     scene.add(box);
@@ -654,6 +656,7 @@ function startPov() {
 }
 function povVisuals(on) {
   for (const o of state.povWalls || []) o.visible = on;
+  for (const m of elevMats) m.opacity = on ? 0.1 : 0.32;
   if (!routeObj) return;
   const u = routeObj.userData;
   for (const o of [...(u.tube || []), ...(u.pillars || []), u.marker]) if (o) o.visible = !on;
