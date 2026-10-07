@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>新宿駅乗り換え3D</title>
-<meta name="description" content="新宿駅の乗り換えを、OpenStreetMapの実データから作った3D模型と高速POVで確認できる非公式ツール">
-<meta name="theme-color" content="#0a0d12">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0d12'/%3E%3Cpath d='M8 22l8-12 8 12' stroke='%2337e2a0' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<title>新宿駅乗り換え3Dアプリ</title>
+<meta name="description" content="新宿駅の乗り換えを、実地図データの3D模型と高速POVで確認できる非公式ツール">
+<meta name="theme-color" content="#0b0f16">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0f16'/%3E%3Cpath d='M7 23l9-14 9 14' stroke='%23ffb020' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=M+PLUS+1p:wght@500;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@500;700;900&family=JetBrains+Mono:wght@500;700&display=swap">
 <link rel="stylesheet" href="css/style.css">
 <script type="importmap">
 { "imports": {
@@ -17,106 +17,91 @@
 } }
 </script>
 </head>
-<body>
+<body class="plan">
 <canvas id="stage"></canvas>
 <div id="fader"></div>
+<div id="loading"><b>SHINJUKU STATION MODEL</b><i></i><span id="loadMsg">模型を組み立てています</span></div>
 
-<div id="loading"><b>SHINJUKU STATION</b><i></i><span id="loadMsg">模型を組み立てています</span></div>
-
-<!-- ルート選択パネル -->
-<section id="planner" class="panel">
-  <header class="brand">
-    <div class="logo" aria-hidden="true"><span></span></div>
-    <div>
-      <h1>新宿駅 乗り換え3D</h1>
-      <p>実地図データ模型 · JR / 小田急 / 京王 / 地下鉄</p>
+<!-- 操作パネル -->
+<div id="top">
+  <form id="controls" class="panel" autocomplete="off">
+    <div class="brand"><h1>新宿駅乗り換え3Dアプリ</h1><span>新宿駅 JY17 · 実地図データ模型</span></div>
+    <div class="row pickrow">
+      <div class="field">
+        <label for="fromBtn">乗ってきた路線 ▾</label>
+        <button type="button" class="pick" id="fromBtn"><i class="sq"></i><b>タップで一覧</b></button>
+      </div>
+      <button type="button" class="iconbtn" id="swapBtn" aria-label="出発と到着を入れ替え">⇅</button>
+      <div class="field">
+        <label for="toBtn">乗り換える路線・行き先 ▾</label>
+        <button type="button" class="pick" id="toBtn"><i class="sq"></i><b>タップで一覧</b></button>
+      </div>
+      <button type="submit" id="goBtn">出発進行 ▶</button>
     </div>
-  </header>
-
-  <div class="pick">
-    <label class="field">
-      <span>乗ってきた路線・出発地</span>
-      <button class="select" id="fromBtn" type="button"><i class="dot"></i><b>選択してください</b><em>▾</em></button>
-    </label>
-    <button id="swapBtn" class="icon" type="button" aria-label="入れ替え">⇅</button>
-    <label class="field">
-      <span>乗り換える路線・行き先</span>
-      <button class="select" id="toBtn" type="button"><i class="dot"></i><b>選択してください</b><em>▾</em></button>
-    </label>
-  </div>
-
-  <div class="opts">
-    <div class="seg" id="speedSeg" role="radiogroup" aria-label="再生速度">
-      <button data-v="1" type="button">標準</button>
-      <button data-v="2" type="button" class="on">高速</button>
-      <button data-v="4" type="button">超高速</button>
+    <div class="row subrow">
+      <div class="chips" id="presets"></div>
+      <div class="seg" id="speedSeg" role="group" aria-label="再生速度">
+        <button type="button" data-v="1">標準</button>
+        <button type="button" data-v="2" aria-pressed="true">高速</button>
+        <button type="button" data-v="3">超高速</button>
+      </div>
     </div>
-    <label class="toggle"><input type="checkbox" id="bfChk"><span>ベビーカー・車いす</span></label>
-  </div>
+    <div id="err" role="alert"></div>
+  </form>
 
-  <button id="goBtn" class="go" type="button" disabled>出発進行 <span>▶</span></button>
-  <div id="err" class="err" hidden></div>
-
-  <div class="presets-wrap">
-    <span class="mini">よく使う乗り換え</span>
-    <div id="presets" class="presets"></div>
-  </div>
-</section>
-
-<!-- 経路の要約 -->
-<section id="summary" class="panel" hidden>
-  <div class="sum-head">
-    <div class="sum-route" id="sumRoute"></div>
-    <button class="icon" id="menuBtn" type="button" aria-label="ルート選択に戻る">☰</button>
-  </div>
-  <div class="sum-stats">
-    <div><b id="sumTime" class="mono">–</b><span>分（目安）</span></div>
-    <div><b id="sumDist" class="mono">–</b><span>m</span></div>
-    <div><b id="sumUp" class="mono">–</b><span>階段/エスカ</span></div>
-  </div>
-  <div id="sumWarn" class="err" hidden></div>
-  <ol id="steps" class="steps"></ol>
-  <div class="sum-btns">
-    <button id="playBtn2" class="go small" type="button">POVで見る ▶</button>
-    <button id="overviewBtn" class="ghost" type="button">全体を見る</button>
-  </div>
-</section>
-
-<!-- POV中のHUD -->
-<div id="hud" hidden>
-  <div id="nav" class="panel">
-    <div id="navIcon">↑</div>
-    <div class="navtxt"><b id="navText">—</b><span id="navSub"></span></div>
-    <div id="navDist" class="mono">0m</div>
-  </div>
-  <canvas id="minimap" width="300" height="300"></canvas>
-  <div id="player" class="panel">
-    <button id="pauseBtn" class="icon" type="button" aria-label="一時停止">❚❚</button>
-    <div id="bar"><i></i></div>
-    <span id="remain" class="mono">0m</span>
-    <button id="exitPov" class="icon" type="button" aria-label="模型に戻る">✕</button>
-  </div>
-  <p class="hint">画面タップで一時停止 · 左右スワイプで戻す/進める</p>
+  <aside id="board" class="panel" aria-live="polite" hidden>
+    <h2>乗換ルート</h2>
+    <div id="summary"></div>
+    <div id="ropts" class="ropts"></div>
+    <details id="stepsBox">
+      <summary>このルートの道順</summary>
+      <ol id="steps"></ol>
+    </details>
+  </aside>
 </div>
 
-<!-- 選択シート -->
+<div id="viewBtns" hidden>
+  <button type="button" class="btn" id="replayBtn">もう一度</button>
+  <button type="button" class="btn" id="overviewBtn">模型を見る</button>
+</div>
+
+<div id="levels" class="panel"></div>
+
+<!-- POV -->
+<div id="pov" hidden>
+  <button type="button" class="btn" id="menuBtn">☰ ルート選択</button>
+  <div id="povBtns">
+    <button type="button" class="btn" id="replayBtn2">もう一度</button>
+    <button type="button" class="btn amber" id="overviewBtn2">模型を見る</button>
+  </div>
+  <div id="player" class="panel">
+    <div class="prow">
+      <button type="button" id="pauseBtn" aria-label="一時停止">❚❚</button>
+      <div id="bar"><i></i></div>
+      <span id="prog" class="mono">0m / 0m</span>
+    </div>
+    <p>画面タップで一時停止・左右スワイプで戻す/進める</p>
+  </div>
+  <div id="nav" class="panel">
+    <div id="navIcon">↑</div>
+    <div class="navtxt"><b id="navText">—</b><span id="navNext"></span></div>
+    <div id="navDist" class="mono">0m</div>
+  </div>
+  <div id="mapWrap" class="panel"><canvas id="minimap" width="320" height="320"></canvas><span id="mapLv"></span></div>
+</div>
+
+<!-- 路線の一覧 -->
 <div id="sheet" hidden>
   <div class="sheet-bg"></div>
   <div class="sheet panel">
-    <header><b id="sheetTitle">路線を選ぶ</b><button class="icon" id="sheetClose" type="button">✕</button></header>
+    <header><b id="sheetTitle">路線を選ぶ</b><button type="button" class="iconbtn" id="sheetClose">✕</button></header>
     <div id="sheetBody"></div>
   </div>
 </div>
 
-<!-- レベル凡例 -->
-<div id="legend" class="panel">
-  <div id="levelBtns"></div>
-</div>
-
 <footer id="note">
-  個人制作の非公式ツールです。JR東日本・小田急電鉄・京王電鉄・東京メトロ・東京都交通局・西武鉄道とは関係ありません。
-  経路・改札・所要時間は地図データからの推定を含みます。実際は駅の掲示・各社の公式情報でご確認ください。
-  地図データ © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a> (ODbL)
+  ドラッグで回転・ホイールやピンチで拡大。ホーム・通路・階段・改札・建物は OpenStreetMap の実データから生成し（© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>, ODbL）、JR東日本・小田急・京王・東京メトロ・都営地下鉄の公式構内図と照合して番線・改札名を補正しています。経路と所要時間は目安です。
+  個人制作の非公式ツールで、各鉄道会社とは関係ありません。実際の乗り換えは駅の掲示・各社の公式情報でご確認ください。
 </footer>
 
 <script type="module" src="js/app.js"></script>

@@ -35,9 +35,9 @@ class Heap {
   }
 }
 
-export function levelName(lv) {
+export function floorJP(lv) {
   const r = Math.round(lv);
-  return r >= 0 ? `${r + 1}F` : `B${-r}`;
+  return r < 0 ? `地下${-r}階` : `${r + 1}階`;
 }
 
 export class Graph {
@@ -46,6 +46,7 @@ export class Graph {
     this.vec = vec;
     const N = data.nodes, n = data.nodeLv.length, E = data.edges;
     this.n = n;
+    const m = E.length / 3;
     const deg = new Int32Array(n + 1);
     for (let i = 0; i < E.length; i += 3) { deg[E[i]]++; deg[E[i + 1]]++; }
     const off = new Int32Array(n + 1);
@@ -58,9 +59,9 @@ export class Graph {
       to[fill[b]] = a; eid[fill[b]++] = e;
     }
     this.off = off; this.to = to; this.eid = eid;
-    this.kind = new Uint8Array(E.length / 3);
-    this.len = new Float32Array(E.length / 3);
-    this.cm = new Float32Array(E.length / 3);
+    this.kind = new Uint8Array(m);
+    this.len = new Float32Array(m);
+    this.cm = new Float32Array(m);
     for (let i = 0, e = 0; i < E.length; i += 3, e++) {
       const a = E[i], b = E[i + 1];
       this.kind[e] = E[i + 2];
@@ -71,7 +72,6 @@ export class Graph {
     this.gate = new Map();
     for (const g of data.gates) if (!this.gate.has(g.n) || g.name) this.gate.set(g.n, g.name || '');
     this.opBit = Object.fromEntries(data.ops.map((o) => [o.key, o.bit]));
-    this.opName = Object.fromEntries(data.ops.map((o) => [o.bit, o.name]));
     this.lines = Object.fromEntries(data.lines.map((l) => [l.key, l]));
     this.exits = Object.fromEntries(data.exits.map((x) => [x.key, x]));
   }
@@ -92,7 +92,7 @@ export class Graph {
     }
   }
 
-  endpoint(key) {
+  endpoint(key, side) {
     if (key.startsWith('x:')) {
       const x = this.exits[key.slice(2)];
       return x && { nodes: [x.n], bits: 0, name: x.name, exit: true };
@@ -101,25 +101,81 @@ export class Graph {
     if (!l) return null;
     const nodes = [];
     const platOf = new Map();
-    for (const pi of l.plats) for (const n of this.d.plats[pi].nodes) { nodes.push(n); platOf.set(n, pi); }
+    const plats = side === 'from' && l.arr ? [...new Set([...l.plats, ...l.arr])] : l.plats;
+    for (const pi of plats) for (const n of this.d.plats[pi].nodes) { nodes.push(n); platOf.set(n, pi); }
     let bits = this.opBit[l.op] || 0;
-    for (const pi of l.plats) for (const n of this.d.plats[pi].nodes) bits |= this.d.zone[n];
+    for (const pi of plats) for (const n of this.d.plats[pi].nodes) bits |= this.d.zone[n];
     return { nodes, bits, name: l.name, platOf, line: l };
   }
 
   route(fromKey, toKey, opt = {}) {
-    const A = this.endpoint(fromKey), B = this.endpoint(toKey);
+    const A = this.endpoint(fromKey, 'from'), B = this.endpoint(toKey, 'to');
     if (!A || !B) return null;
-    const same = A.bits && B.bits && (A.bits & B.bits);
-    let r = null;
-    if (same) r = this._search(A, B, opt, (m) => (m & (A.bits & B.bits)) !== 0, 0);
-    if (!r) r = this._search(A, B, opt, (m) => m === 0 || (m & (A.bits | B.bits)) !== 0, 0);
-    if (!r) r = this._search(A, B, opt, () => true, 0);
+    const r = this._find(A, B, opt);
     if (!r) return null;
     return this._build(r, A, B, opt);
   }
 
-  _search(A, B, opt, allow, _x) {
+  _find(A, B, opt) {
+    const same = A.bits && B.bits && (A.bits & B.bits);
+    let r = null;
+    if (same) r = this._search(A, B, opt, (m) => (m & (A.bits & B.bits)) !== 0);
+    if (!r) r = this._search(A, B, opt, (m) => m === 0 || (m & (A.bits | B.bits)) !== 0);
+    if (!r) r = this._search(A, B, opt, () => true);
+    return r;
+  }
+
+  // ルート候補: 最短・ベビーカー・別ルート（使った辺を重くして探し直す）
+  routes(fromKey, toKey, max = 4) {
+    const A = this.endpoint(fromKey, 'from'), B = this.endpoint(toKey, 'to');
+    if (!A || !B) return [];
+    const out = [];
+    const r0 = this._find(A, B, {});
+    if (!r0) return [];
+    const best = this._build(r0, A, B, {});
+    best.label = 'ルート1（最短）';
+    best.kind = 'best';
+    out.push(best);
+    const rb = this._find(A, B, { bf: true });
+    if (rb) {
+      const bfr = this._build(rb, A, B, { bf: true });
+      bfr.label = bfr.bfStairs ? 'ベビーカー・車いす（一部階段あり）' : 'ベビーカー・車いす（階段なし）';
+      bfr.kind = 'bf';
+      out.push(bfr);
+    }
+    const pen = new Float32Array(this.kind.length).fill(1);
+    const usedSets = [new Set(best.edges)];
+    for (const e of best.edges) if (this.kind[e] !== KIND.PLAT) pen[e] *= 2.2;
+    let n = 2;
+    for (let attempt = 0; attempt < 8 && out.filter((r) => r.kind === 'alt').length < max - 1; attempt++) {
+      const r = this._find(A, B, { pen });
+      if (!r) break;
+      const cand = this._build(r, A, B, {});
+      for (const e of cand.edges) if (this.kind[e] !== KIND.PLAT) pen[e] *= 2.2;
+      if (cand.time > best.time * 1.9 + 90) continue;
+      const share = (S) => {
+        let s = 0, t = 0;
+        for (let i = 0; i < cand.edges.length; i++) {
+          const e = cand.edges[i];
+          if (this.kind[e] === KIND.PLAT) continue;
+          const L = this.len[e];
+          t += L; if (S.has(e)) s += L;
+        }
+        return t ? s / t : 1;
+      };
+      if (usedSets.some((S) => share(S) > 0.7)) continue;
+      usedSets.push(new Set(cand.edges));
+      cand.label = `ルート${n++}`;
+      cand.kind = 'alt';
+      out.push(cand);
+    }
+    // 別ルートは時間順
+    const alts = out.filter((r) => r.kind === 'alt').sort((a, b) => a.time - b.time);
+    alts.forEach((r, i) => { r.label = `ルート${i + 2}`; });
+    return [best, ...out.filter((r) => r.kind === 'bf'), ...alts];
+  }
+
+  _search(A, B, opt, allow) {
     const n = this.n, zone = this.d.zone;
     const dist = new Float64Array(n).fill(Infinity);
     const prev = new Int32Array(n).fill(-1);
@@ -127,7 +183,7 @@ export class Graph {
     const target = new Set(B.nodes);
     const h = new Heap();
     for (const s of A.nodes) { dist[s] = 0; h.push(0, s); }
-    const bf = !!opt.bf;
+    const bf = !!opt.bf, pen = opt.pen;
     while (h.size) {
       const u = h.pop();
       if (target.has(u)) return { end: u, prev, prevE, dist };
@@ -138,6 +194,7 @@ export class Graph {
         const e = this.eid[j];
         let c = this.edgeTime(e, u, v, bf);
         if (!isFinite(c)) continue;
+        if (pen) c *= pen[e];
         if (this.gate.has(v)) c += 5;
         const nd = du + c;
         if (nd < dist[v]) { dist[v] = nd; prev[v] = u; prevE[v] = e; h.push(nd, v); }
@@ -153,20 +210,18 @@ export class Graph {
     const d = this.d, N = d.nodes;
     const pts = path.map((i) => this.P(i));
     const cum = [0], tcum = [0], vcum = [0];
-    let vert = 0;
-    let bfStairs = 0;
-    if (opt.bf) for (const e of es) if (this.kind[e] === KIND.STAIRS || this.kind[e] === KIND.ESC) bfStairs++;
+    let vert = 0, bfStairs = 0, outdoor = 0;
     for (let i = 0; i < es.length; i++) {
       const a = path[i], b = path[i + 1], e = es[i];
       const t = this.edgeTime(e, a, b, false);
-      const dx = N[a * 3] - N[b * 3], dz = N[a * 3 + 2] - N[b * 3 + 2];
-      cum.push(cum[i] + Math.hypot(dx, dz, N[a * 3 + 1] - N[b * 3 + 1]));
+      const L = this.len[e];
+      cum.push(cum[i] + L);
       tcum.push(tcum[i] + t + (this.gate.has(b) ? 5 : 0));
-      // 再生用の時間: エレベーター待ちは短縮
       const vt = this.kind[e] === KIND.ELEV ? 5 + Math.abs(N[a * 3 + 1] - N[b * 3 + 1]) / 1.2 : t;
       vcum.push(vcum[i] + vt + (this.gate.has(b) ? 1.5 : 0));
+      if (d.ein && !d.ein[e] && this.kind[e] !== KIND.PLAT) outdoor += L;
+      if (opt.bf && (this.kind[e] === KIND.STAIRS || this.kind[e] === KIND.ESC)) bfStairs++;
     }
-    // 縦移動の回数
     let inV = false;
     for (const e of es) {
       const v = VERT.has(this.kind[e]);
@@ -176,9 +231,9 @@ export class Graph {
     const fromPlat = A.platOf ? A.platOf.get(path[0]) : null;
     const toPlat = B.platOf ? B.platOf.get(path[path.length - 1]) : null;
     const res = {
-      nodes: path, edges: es, pts, cum, tcum, vcum,
+      nodes: path, edges: es, pts, cum, tcum, vcum, A, B,
       dist: cum[cum.length - 1], time: tcum[tcum.length - 1], vtime: Math.max(1, vcum[vcum.length - 1]),
-      vertCount: vert, bfStairs, fromPlat: fromPlat ?? null, toPlat: toPlat ?? null,
+      vertCount: vert, bfStairs, outdoor, fromPlat: fromPlat ?? null, toPlat: toPlat ?? null,
     };
     const self = this;
     const seg = (s) => {
@@ -186,24 +241,22 @@ export class Graph {
       while (lo < hi - 1) { const m = (lo + hi) >> 1; if (cum[m] <= s) lo = m; else hi = m; }
       return lo;
     };
+    res.seg = seg;
     res.at = (s) => {
       s = Math.max(0, Math.min(res.dist, s));
       const i = seg(s);
       const L = cum[i + 1] - cum[i] || 1;
-      const f = (s - cum[i]) / L;
+      const f = Math.min(1, (s - cum[i]) / L);
       const a = path[i], b = path[Math.min(i + 1, path.length - 1)];
       return self.vec(N[a * 3] + (N[b * 3] - N[a * 3]) * f, N[a * 3 + 1] + (N[b * 3 + 1] - N[a * 3 + 1]) * f, N[a * 3 + 2] + (N[b * 3 + 2] - N[a * 3 + 2]) * f);
     };
     res.dirAt = (s) => {
       const a = res.at(Math.max(0, s - 3)), b = res.at(Math.min(res.dist, s + 3));
-      let dx = b.x - a.x, dz = b.z - a.z;
+      const dx = b.x - a.x, dz = b.z - a.z;
       const L = Math.hypot(dx, dz) || 1;
       return self.vec(dx / L, 0, dz / L);
     };
-    res.lvAt = (s) => {
-      const i = seg(s);
-      return d.nodeLv[path[i]];
-    };
+    res.lvAt = (s) => d.nodeLv[path[seg(s)]];
     res.sAtVtime = (t) => {
       t = Math.max(0, Math.min(res.vtime, t));
       let lo = 0, hi = vcum.length - 1;
@@ -211,112 +264,157 @@ export class Graph {
       const span = vcum[lo + 1] - vcum[lo] || 1;
       return cum[lo] + ((t - vcum[lo]) / span) * (cum[lo + 1] - cum[lo]);
     };
-    const { steps, man } = this._instructions(res, A, B);
-    res.steps = steps;
-    res.man = man;
-    res.nextManeuver = (s) => {
-      for (const m of man) {
-        if (m.s1 != null && s >= m.s0 - 1 && s <= m.s1) return { ...m, d: 0 };
-        if (m.s0 > s - 0.5) return { ...m, d: m.s0 - s };
-      }
-      const last = man[man.length - 1];
-      return { ...last, d: 0 };
+    this._describe(res);
+    res.navAt = (s) => {
+      const segs = res.segs;
+      let k = segs.findIndex((g) => s < g.s1 - 0.01);
+      if (k < 0) k = segs.length - 1;
+      const g = segs[k];
+      return { ...g, d: Math.max(0, g.s1 - s), next: segs[k + 1] || null, k };
     };
     return res;
   }
 
-  _instructions(res, A, B) {
-    const d = this.d, N = d.nodes, path = res.nodes, es = res.edges, cum = res.cum;
-    const steps = [], man = [];
+  // 案内: segs（POV 用の区間） / steps（一覧用） / tagline / gates
+  _describe(res) {
+    const d = this.d, N = d.nodes, path = res.nodes, es = res.edges, cum = res.cum, A = res.A, B = res.B;
     const platLabel = (pi) => (pi != null ? d.plats[pi].label : '');
-    const lineSub = (ep, pi) => (ep.exit ? '' : [platLabel(pi), ep.line?.sub?.replace(/\s*\d.*番線$/, '')].filter(Boolean).join(' · '));
-    steps.push({ icon: '●', text: A.exit ? `${A.name}から出発` : `${A.name}を降りる`, sub: lineSub(A, res.fromPlat), i: 0, cls: 'start' });
-
-    // 区間をまとめる
+    const segs = [];
+    const steps = [];
+    const gatesUsed = [];
+    const lvLen = new Map();
+    const nameLen = new Map();
+    // 1) 辺を「縦移動」「歩き」に分け、改札の位置を拾う
+    const runs = [];
     let i = 0;
-    let lastGateS = -1e9, lastGateName = null;
-    let walkStart = 0, walkLen = 0;
-    const flushWalk = (iEnd) => {
-      if (walkLen >= 8) steps.push({ icon: '↑', text: '通路を進む', sub: '', dist: walkLen, i: walkStart });
-      walkLen = 0;
-      walkStart = iEnd;
-    };
-    const gateHere = (q) => {
-      const name = this.gate.get(path[q]) || '改札';
-      const s = cum[q];
-      const z0 = d.zone[path[Math.max(0, q - 1)]], z1 = d.zone[path[Math.min(path.length - 1, q + 1)]];
-      if (z0 === z1) return; // 改札の脇を通り過ぎるだけ
-      if (!(s - lastGateS < 25 && (name === lastGateName || name === '改札'))) {
-        flushWalk(q);
-        const sub = this._zoneSub(z0, z1);
-        steps.push({ icon: '⇥', text: `${name}を通る`, sub, i: q, cls: 'gate' });
-        man.push({ s0: s, icon: '⇥', text: `${name}を通る`, sub, cls: 'gate' });
-        lastGateName = name;
-      }
-      lastGateS = s;
-    };
     while (i < es.length) {
-      const e = es[i], k = this.kind[e];
-      if (VERT.has(k)) {
-        let j = i;
-        while (j < es.length && this.kind[es[j]] === k) j++;
-        for (let q = i + 1; q <= j; q++) if (this.gate.has(path[q])) gateHere(q);
-        const lv0 = d.nodeLv[path[i]], lv1 = d.nodeLv[path[j]];
-        const y0 = N[path[i] * 3 + 1], y1 = N[path[j] * 3 + 1];
-        const up = y1 > y0;
-        const what = k === KIND.STAIRS ? '階段' : k === KIND.ESC ? 'エスカレーター' : 'エレベーター';
-        const verb = k === KIND.ELEV ? `${what}で${levelName(lv1)}へ` : `${what}を${up ? '上る' : '下りる'}`;
-        const sub = `${levelName(lv0)} → ${levelName(lv1)}`;
-        if (Math.round(lv0) !== Math.round(lv1) || k === KIND.ELEV) {
-          flushWalk(i);
-          steps.push({ icon: up ? '⇡' : '⇣', text: verb, sub, i, cls: 'vert', dist: cum[j] - cum[i] });
-          man.push({ s0: cum[i], s1: cum[j], icon: up ? '⇡' : '⇣', text: verb, sub, cls: 'vert' });
-        } else {
-          walkLen += cum[j] - cum[i];
-        }
-        if (Math.round(lv0) !== Math.round(lv1) || k === KIND.ELEV) walkStart = j;
-        i = j;
-        continue;
+      const k = this.kind[es[i]];
+      const v = VERT.has(k) || (k === KIND.RAMP && Math.abs(d.nodeLv[path[i]] - d.nodeLv[path[i + 1]]) > 0.3);
+      let j = i;
+      while (j < es.length) {
+        const kk = this.kind[es[j]];
+        const vv = VERT.has(kk) || (kk === KIND.RAMP && Math.abs(d.nodeLv[path[j]] - d.nodeLv[path[j + 1]]) > 0.3);
+        if (vv !== v || (v && kk !== k)) break;
+        j++;
       }
-      walkLen += cum[i + 1] - cum[i];
-      if (this.gate.has(path[i + 1])) gateHere(i + 1);
-      i++;
+      runs.push({ i, j, v, k });
+      i = j;
     }
-    flushWalk(es.length);
-    steps.push({ icon: '◎', text: B.exit ? `${B.name}に到着` : `${B.name}に乗る`, sub: lineSub(B, res.toPlat), i: path.length - 1, cls: 'end' });
-
-    // 曲がり角（POV用）
-    const turns = [];
-    const at = res.at;
-    for (let s = 6; s < res.dist - 6; s += 2) {
-      const p0 = at(s - 5), p1 = at(s), p2 = at(s + 5);
-      if (Math.abs(p0.y - p1.y) > 0.5 || Math.abs(p2.y - p1.y) > 0.5) continue;
+    // 2) 歩きの区間の中の「改札」と「曲がり角」
+    const turnAt = (s) => {
+      const p0 = res.at(s - 5), p1 = res.at(s), p2 = res.at(s + 5);
+      if (Math.abs(p0.y - p1.y) > 0.5 || Math.abs(p2.y - p1.y) > 0.5) return 0;
       const ax = p1.x - p0.x, az = p1.z - p0.z, bx = p2.x - p1.x, bz = p2.z - p1.z;
       const la = Math.hypot(ax, az), lb = Math.hypot(bx, bz);
-      if (la < 3 || lb < 3) continue;
-      const cr = (ax * bz - az * bx) / (la * lb), dt = (ax * bx + az * bz) / (la * lb);
-      const ang = Math.atan2(cr, dt) * 180 / Math.PI;
-      if (Math.abs(ang) < 50) continue;
-      const prevT = turns[turns.length - 1];
-      if (prevT && s - prevT.s0 < 8) { if (Math.abs(ang) > Math.abs(prevT.ang)) { prevT.s0 = s - 2; prevT.ang = ang; } continue; }
-      turns.push({ s0: s - 2, ang });
+      if (la < 3 || lb < 3) return 0;
+      return Math.atan2((ax * bz - az * bx) / (la * lb), (ax * bx + az * bz) / (la * lb)) * 180 / Math.PI;
+    };
+    let lastGate = { s: -1e9, name: '' };
+    for (const rn of runs) {
+      const s0 = cum[rn.i], s1 = cum[rn.j];
+      const lv0 = d.nodeLv[path[rn.i]], lv1 = d.nodeLv[path[rn.j]];
+      if (rn.v) {
+        const y0 = N[path[rn.i] * 3 + 1], y1 = N[path[rn.j] * 3 + 1];
+        const up = y1 > y0;
+        const what = rn.k === KIND.ESC ? 'エスカレーター' : rn.k === KIND.ELEV ? 'エレベーター' : rn.k === KIND.RAMP ? 'スロープ' : '階段';
+        if (Math.round(lv0) === Math.round(lv1) && rn.k !== KIND.ELEV) {
+          segs.push({ s0, s1, icon: up ? '↗' : '↘', text: `${what}を${up ? '上がる' : '下りる'}`, cls: 'vert', type: 'v' });
+          continue;
+        }
+        const text = `${what}で${floorJP(lv1)}へ${rn.k === KIND.ELEV ? '' : up ? '上がる' : '下りる'}`.replace(/へ$/, 'へ');
+        segs.push({ s0, s1, icon: up ? '↗' : '↘', text, cls: 'vert', type: 'v' });
+        steps.push({ icon: up ? '⇡' : '⇣', text, sub: `${floorJP(lv0)} → ${floorJP(lv1)}`, i: rn.i, cls: 'vert', dist: s1 - s0 });
+        continue;
+      }
+      // 歩き: 改札・曲がり角のイベント
+      const ev = [];
+      for (let q = rn.i + 1; q <= rn.j; q++) {
+        if (!this.gate.has(path[q])) continue;
+        const z0 = d.zone[path[Math.max(0, q - 1)]], z1 = d.zone[path[Math.min(path.length - 1, q + 1)]];
+        if (z0 === z1) continue;
+        const name = this.gate.get(path[q]) || '改札';
+        if (cum[q] - lastGate.s < 25 && (name === lastGate.name)) { lastGate.s = cum[q]; continue; }
+        lastGate = { s: cum[q], name };
+        ev.push({ s: cum[q], q, type: 'gate', name, sub: this._zoneSub(z0, z1) });
+        gatesUsed.push(name);
+      }
+      for (let s = s0 + 6; s < s1 - 6; s += 2) {
+        const ang = turnAt(s);
+        if (Math.abs(ang) < 55) continue;
+        const prev = ev.filter((e) => e.type === 'turn').pop();
+        if (prev && s - prev.s < 9) { if (Math.abs(ang) > Math.abs(prev.ang)) { prev.s = s; prev.ang = ang; } continue; }
+        if (ev.some((e) => e.type === 'gate' && Math.abs(e.s - s) < 6)) continue;
+        ev.push({ s, type: 'turn', ang });
+      }
+      ev.sort((a, b) => a.s - b.s);
+      // 区間の名前
+      const lv = Math.round(lv0);
+      let nm = '';
+      let outdoorRun = 0, platRun = 0;
+      const names = new Map();
+      for (let q = rn.i; q < rn.j; q++) {
+        const e = es[q], L = this.len[e];
+        if (this.kind[e] === KIND.PLAT) platRun += L;
+        if (d.ein && !d.ein[e] && this.kind[e] !== KIND.PLAT) outdoorRun += L;
+        const ni = d.ename ? d.ename[e] : -1;
+        if (ni >= 0) names.set(ni, (names.get(ni) || 0) + L);
+        lvLen.set(lv, (lvLen.get(lv) || 0) + L);
+        if (ni >= 0) nameLen.set(ni, (nameLen.get(ni) || 0) + L);
+      }
+      if (names.size) {
+        const [ni, L] = [...names.entries()].sort((a, b) => b[1] - a[1])[0];
+        if (L > 15) nm = d.names[ni];
+      }
+      const walkText = platRun > (s1 - s0) * 0.6 ? 'ホームを進む' : outdoorRun > (s1 - s0) * 0.5 ? (nm ? `${nm}を歩く` : '外を歩く') : nm ? `${nm}を進む` : `${floorJP(lv)}の通路を進む`;
+      let cur = s0;
+      for (const e of ev) {
+        const pre = e.type === 'gate' ? 4 : 5;
+        if (e.s - pre > cur + 0.5) segs.push({ s0: cur, s1: e.s - pre, icon: '↑', text: walkText, cls: '', type: 'w' });
+        const a = Math.max(cur, e.s - pre);
+        if (e.type === 'gate') {
+          segs.push({ s0: a, s1: e.s + 1, icon: '⇥', text: `${e.name}を通る`, sub: e.sub, cls: 'gate', type: 'g' });
+          steps.push({ icon: '⇥', text: `${e.name}を通る`, sub: e.sub, i: e.q, cls: 'gate' });
+          cur = e.s + 1;
+        } else {
+          const u = Math.abs(e.ang) > 145, right = e.ang > 0;
+          segs.push({ s0: a, s1: e.s + 2, icon: u ? '↶' : right ? '↱' : '↰', text: u ? '折り返す' : right ? '右へ曲がる' : '左へ曲がる', cls: '', type: 't' });
+          cur = e.s + 2;
+        }
+      }
+      if (s1 > cur + 0.3) segs.push({ s0: cur, s1, icon: '↑', text: walkText, cls: '', type: 'w' });
+      if (s1 - s0 >= 10) steps.push({ icon: '↑', text: walkText, sub: '', dist: s1 - s0, i: rn.i, cls: '' });
     }
-    for (const t of turns) {
-      if (man.some((m) => m.s1 != null ? t.s0 >= m.s0 - 4 && t.s0 <= m.s1 + 4 : Math.abs(m.s0 - t.s0) < 5)) continue;
-      const u = Math.abs(t.ang) > 145;
-      const right = t.ang > 0;
-      man.push({ s0: t.s0, icon: u ? '↶' : right ? '↱' : '↰', text: u ? '折り返す' : right ? '右へ曲がる' : '左へ曲がる', sub: '', cls: '' });
+    // 小さすぎる区間はまとめる
+    const merged = [];
+    for (const g of segs) {
+      const last = merged[merged.length - 1];
+      if (last && last.type === 'w' && g.type === 'w' && last.text === g.text) { last.s1 = g.s1; continue; }
+      merged.push(g);
     }
-    man.sort((a, b) => a.s0 - b.s0);
-    man.push({ s0: res.dist, icon: '◎', text: B.exit ? `${B.name}に到着` : `${B.name} ${platLabel(res.toPlat)}`, sub: B.exit ? '' : 'ホームに到着', cls: 'end' });
-    return { steps, man };
+    const endText = B.exit ? `${B.name}に到着` : `${B.name} ${platLabel(res.toPlat)}に到着`;
+    merged.push({ s0: res.dist, s1: res.dist + 0.001, icon: '◎', text: endText, cls: 'end', type: 'e' });
+    res.segs = merged;
+    // 一覧
+    steps.sort((a, b) => a.i - b.i);
+    const startText = A.exit ? `${A.name}から出発` : `${A.name} ${platLabel(res.fromPlat)}`;
+    steps.unshift({ icon: '●', text: startText, sub: A.exit ? '' : (A.line?.sub || '').replace(/\s*[\d・]+番(線|ホーム)$/, ''), i: 0, cls: 'start' });
+    steps.push({ icon: '◎', text: endText, sub: B.exit ? (this.exits[B.line?.key]?.sub || '') : (B.line?.sub || '').replace(/\s*[\d・]+番(線|ホーム)$/, ''), i: path.length - 1, cls: 'end' });
+    res.steps = steps;
+    // タグライン（経由する階・通路名・外を歩くか）
+    const lvs = [...lvLen.entries()].filter(([, L]) => L >= 20).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([l]) => l).sort((a, b) => b - a);
+    const nms = [...nameLen.entries()].filter(([, L]) => L >= 25).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([ni]) => d.names[ni]);
+    const parts = [];
+    if (res.outdoor >= 30) parts.push('外を歩く');
+    if (lvs.length) parts.push(lvs.map(floorJP).join('・') + '経由');
+    if (nms.length) parts.push(nms.join(' / '));
+    res.tagline = parts.join(' / ');
+    res.gatesUsed = gatesUsed;
   }
 
   _zoneSub(z0, z1) {
     const nm = (z) => {
       if (!z) return '改札外';
-      const names = this.d.ops.filter((o) => z & o.bit).map((o) => o.name);
-      return names.join('・') || '改札外';
+      return this.d.ops.filter((o) => z & o.bit).map((o) => o.name).join('・') || '改札外';
     };
     if (z0 === z1) return '';
     return `${nm(z0)} → ${nm(z1)}`;

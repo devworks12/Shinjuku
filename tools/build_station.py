@@ -247,6 +247,10 @@ edges = {}  # (a,b) sorted -> [kind, costmul]
 KCODE = {"walk": 0, "stairs": 1, "esc": 2, "elev": 3, "plat": 4, "ramp": 5}
 
 
+edge_way = {}   # 辺 -> 元の OSM way id（表示・案内用）
+CUR_WID = None
+
+
 def add_edge(a, b, kind, cm=1.0):
     if a == b:
         return
@@ -254,6 +258,8 @@ def add_edge(a, b, kind, cm=1.0):
     old = edges.get(k)
     if old is None or KCODE[kind] < KCODE[old[0]]:
         edges[k] = [kind, cm]
+    if CUR_WID is not None and k not in edge_way:
+        edge_way[k] = CUR_WID
 
 
 def seg_len(pts):
@@ -266,6 +272,7 @@ def seg_len(pts):
 
 way_chain = {}
 for wid, pts, kind, lv, cm, t in walk_ways:
+    CUR_WID = wid
     levels = sorted(set(lv))
     if kind == "walk" or len(levels) == 1 and kind != "elev":
         L = levels[0]
@@ -309,6 +316,8 @@ for wid, pts, kind, lv, cm, t in walk_ways:
         add_edge(idx[i - 1], idx[i], kind, cm)
     way_chain[wid] = idx
     explicit_v.update(idx)
+
+CUR_WID = None
 
 # 同じ OSM ノードが複数の階にある -> 縦につなぐ（エレベーターなら elev、それ以外は段差扱い）
 by_osm = defaultdict(list)
@@ -408,6 +417,7 @@ for pts, glv, gname in gate_lines:
                 x = pa[0] + (pb[0] - pa[0]) * tt
                 z = pa[1] + (pb[1] - pa[1]) * tt
                 g = vnode_free(x, z, vnodes[a][3])
+                CUR_WID = edge_way.get((a, b))
                 del edges[(a, b)]
                 add_edge(a, g, kind, cm)
                 add_edge(g, b, kind, cm)
@@ -437,6 +447,7 @@ for wid, pts, kind, lv, cm, t in walk_ways:
     a, b = best
     k = (a, b) if a < b else (b, a)
     kind0, cm0 = edges.pop(k)
+    CUR_WID = edge_way.get(k)
     g = vnode_free((vnodes[a][0] + vnodes[b][0]) / 2, (vnodes[a][2] + vnodes[b][2]) / 2, vnodes[a][3])
     add_edge(a, g, kind0, cm0)
     add_edge(g, b, kind0, cm0)
@@ -445,6 +456,7 @@ for wid, pts, kind, lv, cm, t in walk_ways:
     gates.append(dict(n=g, name=C.GATE_NAMES.get(gname, gname)))
     n_gate_way += 1
 
+CUR_WID = None
 # ------------------------------------------------------------------ 補助: 隣接
 def build_adj():
     adj = defaultdict(list)
@@ -454,6 +466,7 @@ def build_adj():
     return adj
 
 
+CUR_WID = None
 # ------------------------------------------------------------------ ホーム
 OPBIT = {k: b for k, _, b in C.OPS}
 node_names = defaultdict(list)
@@ -610,6 +623,7 @@ for p in plats:
         linked += 1
     p["linked"] = linked
 
+CUR_WID = None
 # OSM で構内通路が描かれていないホームは、指定した地点の地上通路へ改札＋エスカレーターでつなぐ
 for pid, (sx, sz), slv, gname in C.SYNTH_LINKS:
     p = next((q for q in plats if q["id"] == pid), None)
@@ -740,6 +754,7 @@ for (a, b), (kind, cm) in list(edges.items()):
     za, zb = zone[a], zone[b]
     if za == zb or (za & zb):
         continue
+    CUR_WID = edge_way.get((a, b))
     del edges[(a, b)]
     # 会社どうしが直接つながっている場合は「出る改札」「入る改札」の2つを入れ、間を改札外にする
     fr = [0.5] if not (za and zb) else [0.3, 0.7]
@@ -774,6 +789,7 @@ for (a, b), (kind, cm) in list(edges.items()):
     for u, v in zip(chain, chain[1:]):
         add_edge(u, v, kind, cm)
     n_auto += 1
+CUR_WID = None
 adj = build_adj()
 
 # 名前が「改札」だけの改札は、会社名で呼ぶ
@@ -827,20 +843,78 @@ for o in used:
     out_lv.append(round(lv, 2))
     out_zone.append(zone[o])
 out_edges = []
+out_ekeys = []
 for (a, b), (kind, cm) in edges.items():
     if a in remap and b in remap:
         out_edges += [remap[a], remap[b], KCODE[kind]]
+        out_ekeys.append((a, b))
 out_cost = [round(cm, 2) for (a, b), (kind, cm) in edges.items() if a in remap and b in remap]
+
+# 辺ごとの「屋内か」と「通路名」
+FLOOR_PART = re.compile(r"^(地下)?\d+階$|^\d+F$|^B\d+F?$")
+PREFIX_PART = re.compile(r"(駅|新宿駅|\(改札外\))$")
+
+
+def passage_name(t):
+    name = t.get("name", "")
+    if not name:
+        return ""
+    parts = [x.strip() for x in name.split(";") if x.strip()]
+    keep = [x for x in parts if not FLOOR_PART.match(x)]
+    if len(parts) > 1:
+        keep = [x for x in keep[1:]] or []  # 先頭は「JR新宿駅」などの駅名
+    last = keep[-1] if keep else (parts[0] if len(parts) == 1 else "")
+    if re.search(r"(エレベーター|トイレ|番線|ホーム|改札|ロッカー|エリア|券売機|出入口|入口|^[A-Z]?\d+$)", last):
+        return ""
+    if t.get("highway") in ROAD or t.get("footway") in ("sidewalk", "crossing"):
+        return last if len(parts) == 1 else ""
+    return last
+
+
+def is_indoor_way(t):
+    if t.get("indoor") or t.get("tunnel") in ("yes", "building_passage") or t.get("covered") == "yes":
+        return True
+    if t.get("highway") in ROAD or t.get("footway") in ("sidewalk", "crossing"):
+        return False
+    lv = way_levels(t)
+    if lv is not None and any(v != 0 for v in lv):
+        return True
+    name = t.get("name", "")
+    if any(name.startswith(p) for pres in C.OP_PREFIX.values() for p in pres) and "改札外" not in name:
+        return True
+    return t.get("highway") in ("corridor", "elevator")
+
+
+names_list = []
+name_idx = {}
+out_ename, out_ein = [], []
+for (a, b) in out_ekeys:
+    wid = edge_way.get((a, b))
+    t = ways[wid][1] if wid in ways else {}
+    nm = passage_name(t) if t else ""
+    if nm and nm not in name_idx:
+        name_idx[nm] = len(names_list)
+        names_list.append(nm)
+    out_ename.append(name_idx.get(nm, -1))
+    kind = edges[(a, b)][0]
+    if kind in ("plat", "elev"):
+        out_ein.append(1)
+    elif t:
+        out_ein.append(1 if is_indoor_way(t) else 0)
+    else:
+        # 改札や補助の辺: 両端の階で判断（地上以外は屋内）
+        out_ein.append(1 if abs(vnodes[a][3]) > 0.1 or abs(vnodes[b][3]) > 0.1 else 0)
 
 # 改札: 同じ名前・近い位置はまとめず、全部出す（経路判定用）。表示は名前ごとに代表1つ
 out_gates = []
 for g in gates:
+    g["name"] = C.FINAL_GATE_NAMES.get(g["name"], g["name"])
     if g["n"] in remap:
         out_gates.append(dict(n=remap[g["n"]], name=g["name"]))
 
 # ホーム
 line_of_plat = defaultdict(list)
-for key, name, sub, color, op, pls in C.LINES:
+for key, name, sub, color, op, pls, *rest in C.LINES:
     for pid in pls:
         line_of_plat[pid].append(key)
 out_plats = []
@@ -857,12 +931,15 @@ for p in plats:
     out_plats.append(dict(id=p["id"], label=p["label"], short=p["short"], lv=p["lv"], y=C.level_height(p["lv"]),
                           ring=ring, lines=line_of_plat.get(p["id"], []), nodes=sp))
 out_lines = []
-for key, name, sub, color, op, pls in C.LINES:
+for key, name, sub, color, op, pls, *rest in C.LINES:
     ps = [pidx[p] for p in pls if p in pidx]
     if not ps:
         print("line has no platform:", key)
         continue
-    out_lines.append(dict(key=key, name=name, sub=sub, color=color, op=op, plats=ps))
+    ln = dict(key=key, name=name, sub=sub, color=color, op=op, plats=ps)
+    if rest:
+        ln["arr"] = [pidx[p] for p in rest[0] if p in pidx]
+    out_lines.append(ln)
 
 # ------------------------------------------------------------------ 表示用: 建物・道路・線路・店舗
 def ring_area(r):
@@ -985,6 +1062,241 @@ for n, (la, lo, t) in nodes.items():
     shops += [round(x, 1), round(C.level_height(lv), 1), round(z, 1), lv]
 
 levels = sorted({round(v) for v in out_lv})
+
+# ------------------------------------------------------------------ 通路の形（階ごとのマス目）
+# 駅の向きに合わせて回したマス目（RES m 角）に、歩ける床(1)・吹き抜け/ホーム/階段口(2)を塗る。
+# 3D 表示ではこのマス目から床・壁・天井を作る
+import numpy as np  # noqa: E402
+
+RES = C.GRID_RES
+# 主な向き: 屋内の辺の向き（90度の剰余）の長さ重み付きヒストグラムの山
+hist = np.zeros(180)
+for i in range(0, len(out_edges), 3):
+    a, b = out_edges[i], out_edges[i + 1]
+    if not out_ein[i // 3]:
+        continue
+    dx = out_nodes[b * 3] - out_nodes[a * 3]
+    dz = out_nodes[b * 3 + 2] - out_nodes[a * 3 + 2]
+    L = math.hypot(dx, dz)
+    if L < 2:
+        continue
+    ang = math.degrees(math.atan2(dz, dx)) % 90
+    hist[int(ang * 2) % 180] += L
+hist = np.convolve(np.concatenate([hist[-6:], hist, hist[:6]]), np.ones(7), "valid")[3:-3]
+THETA = math.radians(int(np.argmax(hist)) / 2)
+CT, ST = math.cos(THETA), math.sin(THETA)
+
+
+def to_grid(x, z):  # ワールド -> 回転座標
+    return x * CT + z * ST, -x * ST + z * CT
+
+
+corners = [to_grid(x, z) for x in (C.CLIP["xmin"], C.CLIP["xmax"]) for z in (C.CLIP["zmin"], C.CLIP["zmax"])]
+U0 = math.floor(min(c[0] for c in corners) / RES) * RES
+V0 = math.floor(min(c[1] for c in corners) / RES) * RES
+GW = int(math.ceil((max(c[0] for c in corners) - U0) / RES))
+GH = int(math.ceil((max(c[1] for c in corners) - V0) / RES))
+cu = U0 + (np.arange(GW) + 0.5) * RES
+cv = V0 + (np.arange(GH) + 0.5) * RES
+
+
+def paint_segment(mask, p, q, half, val, cap=True, over=None):
+    """線分 p-q（回転座標）から half 以内のマスを val に（over 指定時はその値のマスだけ）"""
+    (u1, v1), (u2, v2) = p, q
+    pad = half + RES
+    i0 = max(0, int((min(u1, u2) - pad - U0) / RES)); i1 = min(GW, int((max(u1, u2) + pad - U0) / RES) + 1)
+    j0 = max(0, int((min(v1, v2) - pad - V0) / RES)); j1 = min(GH, int((max(v1, v2) + pad - V0) / RES) + 1)
+    if i0 >= i1 or j0 >= j1:
+        return
+    U, V = np.meshgrid(cu[i0:i1], cv[j0:j1])
+    du, dv = u2 - u1, v2 - v1
+    L2 = du * du + dv * dv or 1e-9
+    t = ((U - u1) * du + (V - v1) * dv) / L2
+    if cap:
+        tc = np.clip(t, 0, 1)
+        d = np.hypot(U - (u1 + tc * du), V - (v1 + tc * dv))
+        hit = d <= half
+    else:
+        d = np.hypot(U - (u1 + t * du), V - (v1 + t * dv))
+        hit = (d <= half) & (t >= 0) & (t <= 1)
+    sub = mask[j0:j1, i0:i1]
+    if over is not None:
+        hit &= np.isin(sub, over)
+    sub[hit] = val
+
+
+def paint_polygon(mask, ring, val, over=None):
+    from matplotlib.path import Path
+    pts = [to_grid(x, z) for x, z in ring]
+    us = [p[0] for p in pts]; vs = [p[1] for p in pts]
+    i0 = max(0, int((min(us) - U0) / RES)); i1 = min(GW, int((max(us) - U0) / RES) + 2)
+    j0 = max(0, int((min(vs) - V0) / RES)); j1 = min(GH, int((max(vs) - V0) / RES) + 2)
+    if i0 >= i1 or j0 >= j1:
+        return
+    U, V = np.meshgrid(cu[i0:i1], cv[j0:j1])
+    hit = Path(pts).contains_points(np.stack([U.ravel(), V.ravel()], 1)).reshape(U.shape)
+    sub = mask[j0:j1, i0:i1]
+    if over is not None:
+        hit &= np.isin(sub, over)
+    sub[hit] = val
+
+
+WIDE = re.compile(r"(自由通路|コンコース|広場|プロムナード|通路|地下道|モール|サブナード)")
+masks = {L: np.zeros((GH, GW), np.uint8) for L in levels}
+P3 = lambda i: (out_nodes[i * 3], out_nodes[i * 3 + 1], out_nodes[i * 3 + 2])  # noqa: E731
+vert_edges = []
+for e in range(len(out_ekeys)):
+    a, b, k = out_edges[e * 3], out_edges[e * 3 + 1], out_edges[e * 3 + 2]
+    la, lb = out_lv[a], out_lv[b]
+    pa, pb = to_grid(P3(a)[0], P3(a)[2]), to_grid(P3(b)[0], P3(b)[2])
+    if k in (KCODE["stairs"], KCODE["esc"]) or (k == KCODE["ramp"] and abs(la - lb) > 0.3):
+        vert_edges.append(e)
+        continue
+    if k in (KCODE["plat"], KCODE["elev"]) or not out_ein[e]:
+        continue
+    if abs(la - lb) > 0.3:
+        continue
+    L = round(la)
+    if abs(la - L) > 0.3 or L not in masks:
+        continue
+    wid = edge_way.get(out_ekeys[e])
+    t = ways[wid][1] if wid in ways else {}
+    w = C.CORRIDOR_W
+    try:
+        w = float(t.get("width", "")) if t.get("width") else w
+    except ValueError:
+        pass
+    if WIDE.search(t.get("name", "")):
+        w = max(w, C.WIDE_W)
+    w = max(2.5, min(w, 14))
+    paint_segment(masks[L], pa, pb, w / 2, 1)
+
+# OSM の屋内エリア（indoor=area/corridor）も床に
+n_area = 0
+for wid, (nds, t) in ways.items():
+    if t.get("indoor") not in ("area", "corridor") and not (t.get("highway") == "pedestrian" and t.get("area") == "yes" and t.get("level")):
+        continue
+    lv = parse_levels(t.get("level"))
+    if not lv or len(nds) < 4:
+        continue
+    ring = way_ring(wid)
+    if not ring or not inside_clip(*ring[0], pad=0):
+        continue
+    for v in set(round(x) for x in lv):
+        if v in masks and v != 0:
+            paint_polygon(masks[v], ring, 1)
+            n_area += 1
+
+# ホームの範囲は「開いた空間」(2)。床・壁は作らずホームの台を別に描く
+for p in out_plats:
+    L = round(p["lv"])
+    if L in masks:
+        ring = [(p["ring"][i], p["ring"][i + 1]) for i in range(0, len(p["ring"]), 2)]
+        paint_polygon(masks[L], ring, 2)
+
+# 階段・エスカレーター: 上の階では床に穴(2)、下の階では床(1)
+for e in vert_edges:
+    a, b, k = out_edges[e * 3], out_edges[e * 3 + 1], out_edges[e * 3 + 2]
+    (ax, ay, az), (bx, by, bz) = P3(a), P3(b)
+    pa, pb = to_grid(ax, az), to_grid(bx, bz)
+    top, bot = (pa, pb) if ay > by else (pb, pa)
+    lt, lb_ = (out_lv[a], out_lv[b]) if ay > by else (out_lv[b], out_lv[a])
+    Lt, Lb = round(lt), round(lb_)
+    half = 1.6 if k != KCODE["esc"] else 1.4
+    if Lt in masks and Lt != Lb:
+        paint_segment(masks[Lt], top, bot, half, 2, cap=False)
+    if Lb in masks:
+        paint_segment(masks[Lb], top, bot, half, 1, cap=False, over=[0])
+
+# エレベーター: 各階で扉の前を床に
+for e in range(len(out_ekeys)):
+    if out_edges[e * 3 + 2] != KCODE["elev"]:
+        continue
+    for n in (out_edges[e * 3], out_edges[e * 3 + 1]):
+        L = round(out_lv[n])
+        if L in masks and abs(out_lv[n] - L) < 0.3 and L != 0:
+            pt = to_grid(P3(n)[0], P3(n)[2])
+            paint_segment(masks[L], pt, pt, 2.2, 1, over=[0])
+
+
+def rle(arr):
+    flat = arr.ravel()
+    change = np.flatnonzero(np.diff(flat)) + 1
+    starts = np.concatenate([[0], change])
+    lens = np.diff(np.concatenate([starts, [flat.size]]))
+    out = []
+    for st, ln in zip(starts.tolist(), lens.tolist()):
+        out += [int(flat[st]), ln]
+    return out
+
+
+grid_out = dict(theta=round(THETA, 6), res=RES, u0=U0, v0=V0, w=GW, h=GH, levels=[])
+for L in levels:
+    m = masks[L]
+    if not m.any():
+        continue
+    ys, xs = np.nonzero(m)
+    j0, j1, i0, i1 = int(ys.min()), int(ys.max()) + 1, int(xs.min()), int(xs.max()) + 1
+    grid_out["levels"].append(dict(lv=L, i0=i0, j0=j0, w=i1 - i0, h=j1 - j0, rle=rle(m[j0:j1, i0:i1])))
+
+# ------------------------------------------------------------------ 案内サイン（ホームへの階段の上に「○番線」）
+plat_of_node = {}
+for pi, p in enumerate(out_plats):
+    for n in p["nodes"]:
+        plat_of_node[n] = pi
+adj_out = defaultdict(list)
+for e in range(len(out_ekeys)):
+    a, b, k = out_edges[e * 3], out_edges[e * 3 + 1], out_edges[e * 3 + 2]
+    adj_out[a].append((b, k))
+    adj_out[b].append((a, k))
+signs = []
+seen_sign = set()
+for pi, p in enumerate(out_plats):
+    near = set()
+    for s0 in p["nodes"]:
+        for v, k in adj_out[s0]:
+            if k == KCODE["plat"] and v not in plat_of_node:
+                near.add(v)
+    for s0 in near:
+        for v, k in adj_out[s0]:
+            if k not in (KCODE["stairs"], KCODE["esc"], KCODE["elev"]):
+                continue
+            # 縦方向の辺をたどって、別の階に着いたところ
+            prev, cur, steps = s0, v, 0
+            while steps < 60:
+                nxt = [(w, kk) for w, kk in adj_out[cur] if w != prev and kk == k]
+                if not nxt or abs(out_lv[cur] - round(out_lv[cur])) < 0.05 and round(out_lv[cur]) != round(out_lv[s0]):
+                    break
+                prev, cur = cur, nxt[0][0]
+                steps += 1
+            if round(out_lv[cur]) == round(out_lv[s0]):
+                continue
+            key = (pi, round(P3(cur)[0] / 4), round(P3(cur)[2] / 4), round(out_lv[cur]))
+            if key in seen_sign:
+                continue
+            seen_sign.add(key)
+            ax, ay, az = P3(cur)
+            bx, by, bz = P3(prev)
+            signs.append(dict(x=round(ax, 1), y=round(ay, 2), z=round(az, 1), dx=round(bx - ax, 2), dz=round(bz - az, 2),
+                              plat=pi, kind="plat"))
+
+# 目印になる建物の名前
+LANDMARK = re.compile(C.LANDMARK_RE)
+for wid, (nds, t) in ways.items():
+    nm = t.get("name", "")
+    if not nm or not t.get("building") or not LANDMARK.search(nm):
+        continue
+    r = way_ring(wid)
+    if len(r) < 4:
+        continue
+    cx = sum(p[0] for p in r) / len(r); cz = sum(p[1] for p in r) / len(r)
+    if not inside_clip(cx, cz):
+        continue
+    for b in buildings:
+        if abs(b["r"][0] - round(r[0][0], 1)) < 0.2 and abs(b["r"][1] - round(r[0][1], 1)) < 0.2:
+            b["name"] = nm.split(";")[0]
+            break
+
 out = dict(
     meta=dict(title="新宿駅", origin=list(C.ORIGIN),
               osm_timestamp=(ROOT / "data/raw/timestamp.txt").read_text().strip()
@@ -996,6 +1308,7 @@ out = dict(
     exits=[dict(key=e["key"], name=e["name"], sub=e["sub"], n=remap[e["n"]]) for e in exits if e["n"] in remap],
     presets=[list(p) for p in C.PRESETS],
     buildings=buildings, roads=roads, rails=rails, shops=shops,
+    ename=out_ename, ein=out_ein, names=names_list, grid=grid_out, signs=signs,
 )
 dst = ROOT / "data/station.json"
 dst.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")))
