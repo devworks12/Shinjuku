@@ -1,11 +1,11 @@
 name: Fetch OSM data
 
+# 新宿駅周辺の OSM データを Geofabrik の関東抽出から切り出して data/raw/ にコミットする
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths:
-      - tools/fetch_osm.py
       - .github/workflows/fetch-osm.yml
 
 permissions:
@@ -21,17 +21,30 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Fetch from Overpass
-        run: python3 tools/fetch_osm.py
+      - name: Install osmium
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
+      - name: Download Kanto extract
+        run: |
+          curl -fsSL --retry 3 -o kanto.osm.pbf https://download.geofabrik.de/asia/japan/kanto-latest.osm.pbf
+          ls -la kanto.osm.pbf
+      - name: Cut Shinjuku bbox
+        run: |
+          mkdir -p data/raw
+          # west,south,east,north
+          osmium extract -b 139.6935,35.6845,139.7085,35.6975 --strategy smart \
+            -S types=multipolygon,route,stop_area,public_transport \
+            kanto.osm.pbf -o data/raw/shinjuku.osm.pbf --overwrite
+          osmium fileinfo -e data/raw/shinjuku.osm.pbf | head -40
+          osmium fileinfo -g header.option.osmosis_replication_timestamp kanto.osm.pbf > data/raw/timestamp.txt || true
+          osmium cat data/raw/shinjuku.osm.pbf -o data/raw/shinjuku.osm.gz --overwrite
+          ls -la data/raw
       - name: Commit data
         run: |
+          rm -f kanto.osm.pbf
           git config user.name "github-actions[bot]"
           git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
           git add data/raw
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "data: OSMデータを更新"
+          git commit -m "data: 新宿駅周辺のOSMデータを更新"
           git pull --rebase origin main
           git push origin HEAD:main
