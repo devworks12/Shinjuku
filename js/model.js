@@ -105,6 +105,7 @@ export class StationModel {
     this.povOnly = [];
     this.overviewOnly = [];
     this.gateObjs = [];
+    this.details = [];       // 遠くでは消す細かい物（看板・柱・改札機・点字ブロック・段鼻）
     this.labels = [];        // {text, pos, cls, lv, color}
     const g = data.grid;
     this.theta = g.theta;
@@ -137,7 +138,7 @@ export class StationModel {
       elev: new THREE.MeshStandardMaterial({ color: 0x8fd0ff, roughness: 0.1, metalness: 0.2, transparent: true, opacity: 0.35, side: THREE.DoubleSide }),
       elevFrame: new THREE.MeshStandardMaterial({ color: 0x48505c, roughness: 0.5, metalness: 0.6 }),
       plat: new THREE.MeshStandardMaterial({ color: 0xbfc3c9, roughness: 0.85 }),
-      platEdge: new THREE.MeshStandardMaterial({ color: 0xf2c200, roughness: 0.7 }),
+      platEdge: new THREE.MeshStandardMaterial({ color: 0xf2c200, roughness: 0.7, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
       ballast: new THREE.MeshStandardMaterial({ color: 0x3b3a38, roughness: 1 }),
       steel: new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 0.3, metalness: 0.9 }),
       pillar: new THREE.MeshStandardMaterial({ color: 0xe6e8eb, roughness: 0.6 }),
@@ -399,7 +400,8 @@ export class StationModel {
         return m;
       };
       add(B.steps, this.mats.step);
-      add(B.noses, this.mats.stepNose);
+      const nm = add(B.noses, this.mats.stepNose);
+      if (nm) this.details.push(nm);
       add(B.escs, this.mats.esc);
       add(B.elev, this.mats.elev);
       add(B.elevTop, this.mats.elevFrame);
@@ -438,7 +440,7 @@ export class StationModel {
         const L = Math.hypot(x2 - x1, z2 - z1);
         if (L < 6) continue; // 短い辺（ホームの端）は付けない
         const ix = (-(z2 - z1) / L) * sgn, iz = ((x2 - x1) / L) * sgn; // 内向き
-        const o0 = 0.55, o1 = 0.85, y = p.y + 0.012;
+        const o0 = 0.55, o1 = 0.85, y = p.y + 0.04;
         const A = [x1 + ix * o0, z1 + iz * o0], B = [x2 + ix * o0, z2 + iz * o0], Cc = [x2 + ix * o1, z2 + iz * o1], D = [x1 + ix * o1, z1 + iz * o1];
         edge.push(A[0], y, A[1], B[0], y, B[1], Cc[0], y, Cc[1], A[0], y, A[1], Cc[0], y, Cc[1], D[0], y, D[1]);
       }
@@ -447,6 +449,7 @@ export class StationModel {
         eg.setAttribute('position', new THREE.Float32BufferAttribute(edge, 3));
         fixNormals(eg);
         const em = new THREE.Mesh(eg, this.mats.platEdge);
+        this.details.push(em);
         em.material.side = THREE.DoubleSide;
         lv.group.add(em);
       }
@@ -473,6 +476,7 @@ export class StationModel {
       }
       if (pillars.length) {
         const pm = new THREE.Mesh(mergeGeometries(pillars, false), this.mats.pillar);
+        this.details.push(pm);
         lv.group.add(pm);
       }
       const roofY = p.y + 4.3;
@@ -492,11 +496,18 @@ export class StationModel {
     }
   }
 
+  // 線路の高さ: いちばん近い階の床（＝ホームの高さ）から 1.05m 下。ホームの上面と重ならないように
+  _railY(y) {
+    const lv = this.d.levels.reduce((b, l) => (Math.abs(l.y - y) < Math.abs(b.y - y) ? l : b), this.d.levels[0]);
+    return lv.y - 1.05;
+  }
+
   _buildRails() {
     const geos = [], steel = [];
     for (const r of this.d.rails || []) {
       for (let i = 0; i + 5 < r.p.length; i += 3) {
-        const x1 = r.p[i], y1 = r.p[i + 1], z1 = r.p[i + 2], x2 = r.p[i + 3], y2 = r.p[i + 4], z2 = r.p[i + 5];
+        const x1 = r.p[i], z1 = r.p[i + 2], x2 = r.p[i + 3], z2 = r.p[i + 5];
+        const y1 = this._railY(r.p[i + 1]), y2 = this._railY(r.p[i + 4]);
         const L = Math.hypot(x2 - x1, z2 - z1);
         if (L < 0.5) continue;
         const yaw = Math.atan2(x2 - x1, z2 - z1);
@@ -595,7 +606,7 @@ export class StationModel {
     }
     for (const [lv, B] of gb) {
       const grp = this.level(lv).group;
-      const add = (geos, mat) => { if (geos.length) grp.add(new THREE.Mesh(mergeGeometries(geos, false), mat)); };
+      const add = (geos, mat) => { if (geos.length) { const m = new THREE.Mesh(mergeGeometries(geos, false), mat); grp.add(m); this.details.push(m); } };
       add(B.machines, this.mats.gate);
       add(B.tops, this.mats.gateTop);
       add(B.lights, this.mats.gateLight);
@@ -614,6 +625,7 @@ export class StationModel {
     }
     this.signCount = (this.signCount || 0) + 1;
     const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+    this.details.push(m);
     m.position.copy(pos);
     m.rotation.y = yaw;
     (opt.group || this.root).add(m);
@@ -701,8 +713,9 @@ export class StationModel {
       const pts = [];
       for (let i = 0; i < b.r.length; i += 2) pts.push(new THREE.Vector2(b.r[i], -b.r[i + 1]));
       if (pts.length < 3) continue;
-      const g = new THREE.ExtrudeGeometry(new THREE.Shape(pts), { depth: Math.max(3, b.h), bevelEnabled: false });
+      const g = new THREE.ExtrudeGeometry(new THREE.Shape(pts), { depth: Math.max(3, b.h) + 0.7, bevelEnabled: false });
       g.rotateX(-Math.PI / 2);
+      g.translate(0, -0.7, 0); // 底面を地面の下へ（1階の床と重なってチカチカしないように）
       g.deleteAttribute('uv');
       (b.name ? marks : plain).push(g);
       if (b.name) {
@@ -741,6 +754,14 @@ export class StationModel {
       for (const k of ['wall', 'wallCap', 'floor', 'step', 'stepNose', 'plat', 'pillar', 'gate', 'esc']) this._base[k] = this.mats[k].color.clone();
     }
     for (const k in this._base) this.mats[k].color.copy(this._base[k]).multiplyScalar(f);
+  }
+
+  // カメラまでの距離で細かい物を出し入れ（遠くでは画素より細くなってチカチカするため）
+  setDetail(dist) {
+    const on = dist < 260;
+    if (on === this._detailOn) return;
+    this._detailOn = on;
+    for (const m of this.details) m.visible = on;
   }
 
   setPov(on) {

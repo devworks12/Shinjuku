@@ -153,6 +153,11 @@ body.pov #levels,body.pov #top,body.pov #viewBtns,body.pov #note{display:none}
 .closebtn:hover{border-color:#4a5a78}
 
 
+#hint{position:fixed;z-index:11;left:50%;bottom:calc(64px + var(--safe-b));transform:translateX(-50%);padding:8px 14px;border-radius:999px;
+  background:rgba(15,20,29,.9);border:1px solid var(--line2);font-size:12.5px;color:var(--dim);white-space:nowrap;pointer-events:none;transition:opacity .5s}
+#hint b{color:var(--ink);font-weight:700}
+#hint.off{opacity:0}
+body.pov #hint,body.routed #hint{display:none}
 #note{position:fixed;z-index:8;right:14px;bottom:calc(6px + var(--safe-b));max-width:560px;font-size:10px;line-height:1.45;color:var(--mute);text-align:right;pointer-events:none}
 #note a{color:var(--dim);pointer-events:auto}
 
@@ -165,6 +170,7 @@ body.pov #levels,body.pov #top,body.pov #viewBtns,body.pov #note{display:none}
 
 @media (pointer:coarse){.cbox input{font-size:16px}}
 @media (max-width:760px){
+  #hint{font-size:11.5px;bottom:calc(20px + var(--safe-b));padding:7px 12px}
   .cbox input{height:38px;font-size:16px;padding-left:42px}
   .cbox input::placeholder{font-size:12px}
   #top{left:8px;right:8px;top:calc(8px + var(--safe-t));flex-direction:column}

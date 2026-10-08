@@ -1,6 +1,6 @@
 // 新宿駅乗り換え3Dアプリ — 画面・カメラ・POV
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { MapNav } from './nav.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -61,17 +61,21 @@ scene.add(sun);
 const camera = new THREE.PerspectiveCamera(45, 1, 0.2, 5000);
 const HOME_T = new THREE.Vector3(10, -4, 20), HOME_P = new THREE.Vector3(-330, 380, 420);
 camera.position.copy(HOME_P);
-const controls = new OrbitControls(camera, canvas);
-controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-controls.maxPolarAngle = Math.PI * 0.49;
-controls.minDistance = 12;
-controls.maxDistance = 1600;
+// 地図アプリと同じ操作（1本指=移動、2本指=拡大・回転、2本指上下=傾き）。詳しくは js/nav.js
+let fly = null;
+const controls = new MapNav(camera, canvas, {
+  minDistance: 12, maxDistance: 1600, maxPolarAngle: Math.PI * 0.47,
+  onStart: () => { fly = null; hideHint(); },
+});
 controls.target.copy(HOME_T);
-controls.screenSpacePanning = false;
-controls.zoomToCursor = true;
+{
+  let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+  for (let i = 0; i < N.length; i += 3) { x0 = Math.min(x0, N[i]); x1 = Math.max(x1, N[i]); z0 = Math.min(z0, N[i + 2]); z1 = Math.max(z1, N[i + 2]); }
+  controls.bounds = { xmin: x0 - 60, xmax: x1 + 60, zmin: z0 - 60, zmax: z1 + 60 };
+}
 
-const composer = new EffectComposer(renderer);
+// 後処理（光のにじみ）の描画先にもアンチエイリアス（MSAA）をかける。無いと細い線や縁が動かすたびにチカチカする
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: Math.min(4, renderer.capabilities.maxSamples || 4) }));
 composer.addPass(new RenderPass(scene, camera));
 const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.7, 0.45, 1.0);
 composer.addPass(bloom);
@@ -86,6 +90,16 @@ function resize() {
 }
 addEventListener('resize', resize);
 resize();
+
+// 操作のヒント（最初の数秒だけ）
+const hintEl = document.createElement('div');
+hintEl.id = 'hint';
+hintEl.innerHTML = matchMedia('(pointer: coarse)').matches
+  ? '<b>1本指</b>で移動　<b>2本指</b>で拡大・回転　<b>2本指で上下</b>に傾き'
+  : '<b>ドラッグ</b>で移動　<b>右ドラッグ</b>で回転・傾き　<b>ホイール</b>で拡大';
+document.body.appendChild(hintEl);
+let hintTimer = setTimeout(hideHint, 6500);
+function hideHint() { clearTimeout(hintTimer); hintEl.classList.add('off'); }
 
 // ---------------------------------------------------------------- 模型
 const model = new StationModel(data, scene);
@@ -609,7 +623,6 @@ function fitRoute() {
 }
 
 // ---------------------------------------------------------------- カメラ移動
-let fly = null;
 function flyTo(target, pos, ms) {
   fly = { t0: performance.now(), ms, ft: controls.target.clone(), tt: target, fp: camera.position.clone(), tp: pos || camera.position.clone().add(target.clone().sub(controls.target)) };
 }
@@ -777,10 +790,11 @@ function drawMinimap(pos, dir, r) {
 // ---------------------------------------------------------------- ループ
 function loop(now) {
   requestAnimationFrame(loop);
+  const prevT = loop.last; loop.last = now;
   if (state.mode === 'pov' && state.pov) stepPov(now);
   else {
     stepFly(now);
-    controls.update();
+    controls.update(Math.min(0.05, (now - (prevT || now)) / 1000) || 1 / 60);
     const r = state.routes[state.sel];
     if (routeObj && r) {
       updateMarker(now, r);
@@ -790,6 +804,10 @@ function loop(now) {
       ov.material.resolution.set(innerWidth, innerHeight);
     }
   }
+  model.setDetail(state.mode === 'pov' ? 0 : camera.position.distanceTo(controls.target));
+  // 引いて見るときは near を遠ざけて奥行きの精度を上げる（面のチカチカ防止）
+  const nearWant = state.mode === 'pov' ? 0.15 : THREE.MathUtils.clamp(camera.position.distanceTo(controls.target) * 0.02, 0.3, 25);
+  if (Math.abs(camera.near - nearWant) > camera.near * 0.15) { camera.near = nearWant; camera.updateProjectionMatrix(); }
   composer.render();
   updateLabels();
 }
