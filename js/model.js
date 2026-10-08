@@ -734,6 +734,15 @@ export class StationModel {
     }
   }
 
+  // 駅の明るさ（1=そのまま）。全体表示では少し落として、経路の光を目立たせる
+  setTone(f) {
+    if (!this._base) {
+      this._base = {};
+      for (const k of ['wall', 'wallCap', 'floor', 'step', 'stepNose', 'plat', 'pillar', 'gate', 'esc']) this._base[k] = this.mats[k].color.clone();
+    }
+    for (const k in this._base) this.mats[k].color.copy(this._base[k]).multiplyScalar(f);
+  }
+
   setPov(on) {
     for (const c of this.ceilings) c.visible = on;
     for (const b of this.buildings || []) b.material.opacity = on ? 0.9 : (b.isLineSegments ? 0.18 : b.material === this.mats.landmark ? 0.28 : 0.12);

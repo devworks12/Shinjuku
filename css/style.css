@@ -7,6 +7,11 @@
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
+/* アプリらしく: ズーム・引っ張り・文字選択・タップの青い枠を止める */
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%;overscroll-behavior:none;touch-action:manipulation}
+body{position:fixed;inset:0;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+input{-webkit-user-select:text;user-select:text}
+button,input,.opt,.ropt,.list{touch-action:manipulation}
 body{background:var(--bg);color:var(--ink);overflow:hidden;
   font:14px/1.5 "Zen Kaku Gothic New",system-ui,"Hiragino Sans","Noto Sans JP",sans-serif;-webkit-font-smoothing:antialiased}
 button{font:inherit;color:inherit}
@@ -158,7 +163,10 @@ body.pov #levels,body.pov #top,body.pov #viewBtns,body.pov #note{display:none}
 .lbl.street{background:none;border:0;color:#9fb0c8;font-weight:500;font-size:10.5px;text-shadow:0 1px 3px #000}
 .lbl.bldg{background:none;border:0;color:#d9b19e;font-weight:500;text-shadow:0 1px 3px #000}
 
+@media (pointer:coarse){.cbox input{font-size:16px}}
 @media (max-width:760px){
+  .cbox input{height:38px;font-size:16px;padding-left:42px}
+  .cbox input::placeholder{font-size:12px}
   #top{left:8px;right:8px;top:calc(8px + var(--safe-t));flex-direction:column}
   #controls{padding:9px 10px;gap:7px;width:100%}
   .brand h1{font-size:15px}

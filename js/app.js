@@ -6,10 +6,21 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { StationModel, floorJP } from './model.js';
 import { Graph } from './route.js';
 
 const $ = (s) => document.querySelector(s);
+
+// ---------------------------------------------------------------- アプリらしい操作（ページ全体のズームを止める）
+// iOS Safari のピンチ（gesture*）、2本指のタッチ移動、トラックパッドのピンチ（ctrl+ホイール）、キーボードの拡大縮小
+for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+addEventListener('wheel', (e) => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
+addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && ['+', '-', '=', '0', ';'].includes(e.key)) e.preventDefault(); });
+// ダブルタップでの拡大は CSS の touch-action: manipulation で止めている
 const EYE = 1.6;
 const SPEED = { 1: 4, 2: 8, 3: 14 }; // 実時間に対する再生倍率
 
@@ -35,7 +46,7 @@ const canvas = $('#stage');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.25;
+renderer.toneMappingExposure = 1.05;
 const scene = new THREE.Scene();
 const BG_PLAN = new THREE.Color(0x0b0f16), BG_POV = new THREE.Color(0xdde1e6);
 scene.background = BG_PLAN.clone();
@@ -78,6 +89,13 @@ resize();
 
 // ---------------------------------------------------------------- 模型
 const model = new StationModel(data, scene);
+
+// 全体表示では駅を少し暗く、経路表示中はさらに暗くして光の線を目立たせる
+function applyTone() {
+  if (state.mode === 'pov') return;
+  model.setTone(state.routes.length ? 0.55 : 0.78);
+}
+applyTone();
 
 // ---------------------------------------------------------------- ラベル
 const labels = model.labels.map((L) => {
@@ -326,6 +344,7 @@ function resetToStart() {
   document.body.classList.remove('routed');
   history.replaceState(null, '', location.pathname + location.search);
   setFocus(null);
+  applyTone();
   flyTo(HOME_T.clone(), HOME_P.clone(), 900);
   layoutUI();
 }
@@ -361,6 +380,7 @@ function go(play) {
   document.body.classList.add('routed');
   renderBoard();
   selectRoute(0, !play);
+  applyTone();
   layoutUI();
   if (play) startPov();
 }
@@ -484,17 +504,92 @@ function buildRouteMesh(r) {
     g.add(ring, pil);
     ends.push(ring, pil);
   }
-  const marker = new THREE.Mesh(new THREE.SphereGeometry(1.4, 16, 12), new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 3, 3), toneMapped: false }));
+  const marker = makeMarker(r.kind === 'bf' ? 0xff7ab8 : 0xffb020);
   g.add(marker);
-  g.userData = { tube, xray, floor, ends, marker };
+  // 画面上で一定の太さの線（遠くから見ても経路がわかるように。近づくと薄くなる）
+  const lg = new LineGeometry();
+  const flat = [];
+  for (const p of pts) flat.push(p.x, p.y, p.z);
+  lg.setPositions(flat);
+  const lm = new LineMaterial({ color: r.kind === 'bf' ? 0xff7ab8 : 0xffb020, linewidth: innerWidth < 760 ? 4 : 5, transparent: true, opacity: 0.9, depthTest: false, depthWrite: false, toneMapped: false });
+  lm.resolution.set(innerWidth, innerHeight);
+  const overlay = new Line2(lg, lm);
+  overlay.computeLineDistances();
+  overlay.renderOrder = 30;
+  g.add(overlay);
+  g.userData = { tube, xray, floor, ends, marker, overlay };
   scene.add(g);
   routeObj = g;
   if (state.mode === 'pov') povRouteVisuals(true);
 }
+// 経路に沿って動く光の玉（いつも手前に描き、画面上の大きさを一定にする。後ろに光の尾）
+const ballTex = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  // やわらかい外側の光
+  const grd = g.createRadialGradient(64, 64, 20, 64, 64, 64);
+  grd.addColorStop(0, 'rgba(255,190,60,0.85)');
+  grd.addColorStop(1, 'rgba(255,190,60,0)');
+  g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+  // 濃い縁取り＋橙の玉＋白い芯（明るい床でも暗い背景でも見える）
+  g.beginPath(); g.arc(64, 64, 30, 0, Math.PI * 2); g.fillStyle = '#1a1206'; g.fill();
+  g.beginPath(); g.arc(64, 64, 25, 0, Math.PI * 2); g.fillStyle = '#ffb020'; g.fill();
+  g.beginPath(); g.arc(64, 64, 12, 0, Math.PI * 2); g.fillStyle = '#ffffff'; g.fill();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+})();
+const dotTex = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  g.beginPath(); g.arc(32, 32, 20, 0, Math.PI * 2); g.fillStyle = '#1a1206'; g.fill();
+  g.beginPath(); g.arc(32, 32, 15, 0, Math.PI * 2); g.fillStyle = '#ffffff'; g.fill();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+})();
+const TRAIL = 10;
+function makeMarker(color) {
+  const grp = new THREE.Group();
+  const mk = (tex, col, opacity, order) => {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, color: col, transparent: true, opacity, depthTest: false, depthWrite: false, toneMapped: false }));
+    sp.renderOrder = order;
+    return sp;
+  };
+  const trail = [];
+  for (let i = 0; i < TRAIL; i++) { const t = mk(dotTex, color, 0.9 * (1 - i / TRAIL), 39); trail.push(t); grp.add(t); }
+  const core = mk(ballTex, color === 0xffb020 ? 0xffffff : color, 1, 41);
+  const halo = core; // 互換用
+  grp.add(core);
+  grp.userData = { halo, core, trail };
+  return grp;
+}
+const _mp = new THREE.Vector3();
+function updateMarker(now, r) {
+  const m = routeObj.userData.marker, u = m.userData;
+  // 一定の速さ（約60m/秒、短い経路でも3秒、長くても12秒で一周）
+  const period = Math.max(3, Math.min(12, r.dist / 60));
+  const k = ((now / 1000) / period) % 1;
+  const s = k * r.dist;
+  _mp.copy(r.at(s)).add(new THREE.Vector3(0, 0.9, 0));
+  const dist = camera.position.distanceTo(_mp);
+  const px = dist * Math.tan((camera.fov * Math.PI) / 360) * 2 / innerHeight; // 1px あたりの長さ
+  const size = (innerWidth < 760 ? 46 : 54) * px;
+  u.core.position.copy(_mp); u.core.scale.setScalar(size * (1 + 0.08 * Math.sin(now / 140)));
+  for (let i = 0; i < u.trail.length; i++) {
+    const ss = s - (i + 1) * Math.max(1.5, r.dist * 0.008);
+    if (ss < 0) { u.trail[i].visible = false; continue; }
+    u.trail[i].visible = true;
+    u.trail[i].position.copy(r.at(ss)).add(new THREE.Vector3(0, 0.9, 0));
+    u.trail[i].scale.setScalar(size * (0.42 - i * 0.025));
+  }
+}
 function povRouteVisuals(on) {
   const u = routeObj?.userData;
   if (!u) return;
-  u.tube.visible = u.xray.visible = u.marker.visible = !on;
+  u.tube.visible = u.xray.visible = u.marker.visible = u.overlay.visible = !on;
   u.ends.forEach((o) => (o.visible = !on));
   u.floor.visible = on;
 }
@@ -551,6 +646,7 @@ function startPov() {
   camera.fov = 70; camera.updateProjectionMatrix();
   bloom.strength = 0.35;
   renderer.toneMappingExposure = 1.0;
+  model.setTone(1);
 }
 function stopPov() {
   if (state.mode !== 'pov') return;
@@ -567,7 +663,8 @@ function stopPov() {
   scene.fog.near = 700; scene.fog.far = 2200;
   camera.fov = 45; camera.updateProjectionMatrix();
   bloom.strength = 0.7;
-  renderer.toneMappingExposure = 1.25;
+  renderer.toneMappingExposure = 1.05;
+  applyTone();
   setFocus(state.focus);
   requestAnimationFrame(layoutUI);
 }
@@ -686,8 +783,11 @@ function loop(now) {
     controls.update();
     const r = state.routes[state.sel];
     if (routeObj && r) {
-      const k = ((now / 1000) * 0.1) % 1;
-      routeObj.userData.marker.position.copy(r.at(k * r.dist)).add(new THREE.Vector3(0, 0.9, 0));
+      updateMarker(now, r);
+      const ov = routeObj.userData.overlay;
+      const d = camera.position.distanceTo(controls.target);
+      ov.material.opacity = Math.max(0.25, Math.min(0.95, (d - 80) / 400));
+      ov.material.resolution.set(innerWidth, innerHeight);
     }
   }
   composer.render();
