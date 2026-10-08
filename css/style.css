@@ -84,6 +84,17 @@ button{font:inherit;color:inherit}
 #steps li em{font-style:normal;color:var(--dim);font-size:11px}
 
 #viewBtns{position:fixed;z-index:10;left:14px;bottom:calc(40px + var(--safe-b));display:flex;gap:8px}
+.bbtns{display:flex;gap:6px}
+.grip{display:none}
+#boardMini{display:flex;flex-direction:column;align-items:stretch;gap:2px;width:300px;padding:10px 14px;text-align:left;cursor:pointer;color:var(--ink)}
+#boardMini:hover{border-color:#4a5a78}
+#boardMini .mrow{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+#boardMini .mtitle{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#boardMini .mtitle::before{content:"● ";color:var(--amber)}
+#boardMini.bf .mtitle::before{color:var(--pink)}
+#boardMini .mmeta{font-size:12px;color:var(--ink);white-space:nowrap}
+#boardMini .mopen{font-size:12px;color:var(--amber);font-weight:700}
+.mgrip{display:none}
 #levels{position:fixed;z-index:9;left:14px;top:300px;padding:5px;display:flex;flex-direction:column;gap:2px}
 #levels.row{flex-direction:row;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
 #levels.row::-webkit-scrollbar{display:none}
@@ -184,9 +195,10 @@ body.pov #hint,body.routed #hint{display:none}
   #goBtn{height:36px;padding:0 10px;font-size:13px}
   .chips{display:none}
   body.routed .subrow{display:none}
-  #board{position:fixed;left:0;right:0;bottom:0;width:auto;max-height:46vh;border-radius:14px 14px 0 0;padding:10px 12px calc(10px + var(--safe-b))}
+  #board{position:fixed;left:0;right:0;bottom:0;width:auto;max-height:46vh;border-radius:14px 14px 0 0;padding:6px 12px calc(10px + var(--safe-b))}
+  .grip,.mgrip{display:block;width:40px;height:4px;border-radius:4px;background:#3a4558;margin:2px auto 4px;flex:none}
+  #boardMini{position:fixed;left:0;right:0;bottom:0;width:auto;border-radius:14px 14px 0 0;padding:6px 14px calc(10px + var(--safe-b))}
   .ropt{padding:7px 10px}
-  #viewBtns{bottom:calc(46vh + 10px)}
   #note{display:none}
   #player{left:8px;right:8px;transform:none;width:auto;top:calc(56px + var(--safe-t))}
   #nav{bottom:calc(14px + var(--safe-b));width:calc(100% - 16px)}

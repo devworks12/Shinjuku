@@ -65,7 +65,7 @@ camera.position.copy(HOME_P);
 let fly = null;
 const controls = new MapNav(camera, canvas, {
   minDistance: 12, maxDistance: 1100, maxPolarAngle: Math.PI * 0.42,
-  onStart: () => { fly = null; hideHint(); },
+  onStart: () => { fly = null; hideHint(); state.userMoved = true; },
 });
 controls.target.copy(HOME_T);
 {
@@ -343,6 +343,39 @@ $('#overviewBtn').onclick = () => { stopPov(); fitRoute(); };
 $('#overviewBtn2').onclick = () => { stopPov(); fitRoute(); };
 $('#menuBtn').onclick = () => { stopPov(); fitRoute(); };
 $('#closeBtn').onclick = () => resetToStart();
+$('#foldBtn').onclick = () => setFold(true);
+$('#boardMini').onclick = () => setFold(false);
+
+// ルート一覧を隠す／開く。隠すと下（PCは右上）に選んでいるルートの細いバーだけ残る
+function setFold(f) {
+  if (!state.routes.length) f = false;
+  state.folded = f;
+  $('#board').hidden = f || !state.routes.length;
+  $('#boardMini').hidden = !f || !state.routes.length;
+  document.body.classList.toggle('folded', f);
+  renderMini();
+  layoutUI();
+  // 視点を動かしていなければ、空いた場所に合わせてルートを映し直す
+  if (!state.userMoved && state.mode !== 'pov') fitRoute();
+}
+function renderMini() {
+  const r = state.routes[state.sel];
+  if (!r) return;
+  const m = $('#boardMini');
+  m.classList.toggle('bf', r.kind === 'bf');
+  m.querySelector('.mtitle').textContent = r.label;
+  m.querySelector('.mmeta').textContent = `約${Math.round(r.dist / 10) * 10}m・約${Math.max(1, Math.round(r.time / 60))}分`;
+}
+// スマホ: 一覧の上の方を下へスワイプで隠す、バーを上へスワイプで開く
+function swipe(el, dir, fn) {
+  let y0 = null;
+  el.addEventListener('pointerdown', (e) => { y0 = e.clientY; });
+  el.addEventListener('pointerup', (e) => { if (y0 != null && (e.clientY - y0) * dir > 40) fn(); y0 = null; });
+  el.addEventListener('pointercancel', () => { y0 = null; });
+}
+swipe($('#board .grip'), 1, () => setFold(true));
+swipe($('#board .bhead'), 1, () => setFold(true));
+swipe($('#boardMini'), -1, () => setFold(false));
 $('#homeBtn').onclick = () => resetToStart();
 
 // 最初の画面に戻る（ルートを消して全体の模型へ）
@@ -354,6 +387,9 @@ function resetToStart() {
   if (routeObj) { scene.remove(routeObj); routeObj.traverse((o) => o.geometry?.dispose()); routeObj = null; }
   for (const L of labels) L.route = false;
   $('#board').hidden = true;
+  $('#boardMini').hidden = true;
+  state.folded = false;
+  document.body.classList.remove('folded');
   $('#viewBtns').hidden = true;
   document.body.classList.remove('routed');
   history.replaceState(null, '', location.pathname + location.search);
@@ -373,7 +409,14 @@ function layoutUI() {
   lv.style.right = 'auto';
   lv.style.bottom = 'auto';
   lv.style.top = Math.round(c.bottom + (mobile ? 6 : 10)) + 'px';
-  if (mobile) { lv.classList.add('row'); lv.style.right = '8px'; return; }
+  const vbtn = $('#viewBtns');
+  if (mobile) {
+    lv.classList.add('row'); lv.style.right = '8px';
+    const bp = !$('#board').hidden ? $('#board') : (!$('#boardMini').hidden ? $('#boardMini') : null);
+    vbtn.style.bottom = bp ? (innerHeight - bp.getBoundingClientRect().top + 8) + 'px' : '';
+    return;
+  }
+  vbtn.style.bottom = '';
   // 縦に並べて入らないときは横並びに
   const vb = $('#viewBtns');
   const bottomLimit = (vb.hidden ? innerHeight - 24 : vb.getBoundingClientRect().top - 10);
@@ -390,6 +433,9 @@ function go(play) {
   state.routes = rs;
   state.sel = 0;
   state.routesFor = state.from + '>' + state.to;
+  state.folded = false;
+  $('#boardMini').hidden = true;
+  document.body.classList.remove('folded');
   history.replaceState(null, '', '#' + encodeURIComponent(state.from) + '>' + encodeURIComponent(state.to));
   document.body.classList.add('routed');
   renderBoard();
@@ -423,7 +469,7 @@ function renderBoard() {
     btn.onclick = () => { selectRoute(i, state.mode !== 'pov'); if (state.mode === 'pov') startPov(); };
     box.appendChild(btn);
   });
-  $('#board').hidden = false;
+  $('#board').hidden = !!state.folded;
   $('#viewBtns').hidden = false;
 }
 function selectRoute(i, fit) {
@@ -432,6 +478,7 @@ function selectRoute(i, fit) {
   const r = state.routes[i];
   buildRouteMesh(r);
   renderSteps(r);
+  renderMini();
   const onRoute = new Set(r.nodes);
   for (const L of labels) L.route = L.cls === 'gate' && (L.nodes || []).some((n) => onRoute.has(n));
   if (fit) fitRoute();
@@ -611,15 +658,56 @@ function povRouteVisuals(on) {
 function fitRoute() {
   const r = state.routes[state.sel];
   if (!r) return;
+  state.userMoved = false;
   const box = new THREE.Box3();
   for (const p of r.pts) box.expandByPoint(p);
   const c = box.getCenter(new THREE.Vector3());
   const size = Math.max(110, box.getSize(new THREE.Vector3()).length());
-  const mobile = innerWidth < 760;
-  const off = new THREE.Vector3(-0.5, 0.95, 0.75).normalize().multiplyScalar(size * (mobile ? 1.8 : 1.2));
-  if (!mobile) c.add(new THREE.Vector3(size * 0.08, 0, -size * 0.1));
-  else c.add(new THREE.Vector3(0, 0, size * 0.3));
+  // 画面のうち、パネルに隠れていない部分の広さに合わせて距離を決める（中心はビューのずらしで合わせる）
+  const fr = freeRect();
+  const k = Math.max(innerHeight / Math.max(120, fr.h), (innerWidth / Math.max(160, fr.w)) * 0.75);
+  const off = new THREE.Vector3(-0.5, 0.95, 0.75).normalize().multiplyScalar(size * 0.95 * Math.min(3.2, Math.max(1, k)));
   flyTo(c, c.clone().add(off), 900);
+}
+
+// パネルに隠れていない画面の範囲
+function freeRect() {
+  const W = innerWidth, H = innerHeight, mobile = W < 760;
+  const vis = (el) => el && !el.hidden && getComputedStyle(el).display !== 'none';
+  let x0 = 0, x1 = W, y0 = 0, y1 = H;
+  const board = $('#board'), mini = $('#boardMini'), lv = $('#levels'), ctr = $('#controls');
+  if (mobile) {
+    y0 = Math.max(ctr.getBoundingClientRect().bottom, vis(lv) ? lv.getBoundingClientRect().bottom : 0) + 4;
+    if (vis(board)) y1 = board.getBoundingClientRect().top;
+    else if (vis(mini)) y1 = mini.getBoundingClientRect().top;
+  } else {
+    if (vis(lv)) x0 = lv.getBoundingClientRect().right + 8;
+    if (vis(board)) x1 = board.getBoundingClientRect().left - 8;
+  }
+  return { x0, y0, x1, y1, w: x1 - x0, h: y1 - y0, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
+}
+// 透視の中心を空いている範囲の中心へ（なめらかに）
+const viewOff = { x: 0, y: 0 };
+function updateViewOffset(dt) {
+  if (state.mode === 'pov') {
+    viewOff.x = viewOff.y = 0;
+    if (camera.view && camera.view.enabled) camera.clearViewOffset();
+    return;
+  }
+  let tx = 0, ty = 0;
+  if (state.mode !== 'pov' && state.routes.length) {
+    const fr = freeRect();
+    tx = innerWidth / 2 - fr.cx;
+    ty = innerHeight / 2 - fr.cy;
+  }
+  const a = 1 - Math.exp(-dt * 8);
+  viewOff.x += (tx - viewOff.x) * a;
+  viewOff.y += (ty - viewOff.y) * a;
+  if (Math.abs(viewOff.x) < 0.5 && Math.abs(viewOff.y) < 0.5 && tx === 0 && ty === 0) {
+    if (camera.view && camera.view.enabled) camera.clearViewOffset();
+    return;
+  }
+  camera.setViewOffset(innerWidth, innerHeight, viewOff.x, viewOff.y, innerWidth, innerHeight);
 }
 
 // ---------------------------------------------------------------- カメラ移動
@@ -804,6 +892,7 @@ function loop(now) {
       ov.material.resolution.set(innerWidth, innerHeight);
     }
   }
+  updateViewOffset(Math.min(0.05, (now - (prevT || now)) / 1000) || 1 / 60);
   model.setDetail(state.mode === 'pov' ? 0 : camera.position.distanceTo(controls.target));
   // 引いて見るときは near を遠ざけて奥行きの精度を上げる（面のチカチカ防止）
   const nearWant = state.mode === 'pov' ? 0.15 : THREE.MathUtils.clamp(camera.position.distanceTo(controls.target) * 0.02, 0.3, 25);

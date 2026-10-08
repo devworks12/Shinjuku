@@ -57,7 +57,8 @@
   </form>
 
   <aside id="board" class="panel" aria-live="polite" hidden>
-    <div class="bhead"><h2>乗換ルート</h2><button type="button" class="closebtn" id="closeBtn" aria-label="ルートを閉じて最初の画面へ">✕ 閉じる</button></div>
+    <div class="grip" aria-hidden="true"></div>
+    <div class="bhead"><h2>乗換ルート</h2><span class="bbtns"><button type="button" class="closebtn" id="foldBtn" aria-label="ルート一覧を隠す">▾ 隠す</button><button type="button" class="closebtn" id="closeBtn" aria-label="ルートを閉じて最初の画面へ">✕ 閉じる</button></span></div>
     <div id="summary"></div>
     <div id="ropts" class="ropts"></div>
     <details id="stepsBox">
@@ -65,6 +66,11 @@
       <ol id="steps"></ol>
     </details>
   </aside>
+  <button type="button" id="boardMini" class="panel" hidden aria-label="ルート一覧を開く">
+    <span class="mgrip" aria-hidden="true"></span>
+    <span class="mrow"><b class="mtitle"></b><span class="mmeta mono"></span></span>
+    <span class="mopen">▴ ルート一覧</span>
+  </button>
 </div>
 
 <div id="viewBtns" hidden>
