@@ -129,7 +129,11 @@ function updateLabels() {
   const mk = (txt, lv) => {
     const b = document.createElement('button');
     b.type = 'button';
-    b.textContent = txt;
+    const short = lv == null ? '全体' : (lv < 0 ? `B${-lv}` : `${lv + 1}F`);
+    b.innerHTML = `<span class="lg"></span><span class="sh"></span>`;
+    b.querySelector('.lg').textContent = txt;
+    b.querySelector('.sh').textContent = short;
+    b.title = txt;
     b.dataset.lv = lv == null ? 'all' : lv;
     b.onclick = () => setFocus(lv);
     box.appendChild(b);
@@ -149,92 +153,201 @@ function setFocus(lv) {
 }
 setFocus(null);
 
-// ---------------------------------------------------------------- 選択
+// ---------------------------------------------------------------- 選択（東京駅版にならったコンボボックス）
+const G_LABEL = { jr: 'JR 在来線', ltd: 'JR 特急', odakyu: '小田急線', keio: '京王線・京王新線', metro: '東京メトロ', toei: '都営地下鉄', seibu: '西武鉄道', exit: '改札・出口' };
+const ITEMS = [
+  ...data.lines.map((l) => ({ key: l.key, g: l.g || 'jr', name: l.name, sub: l.sub, color: l.color, code: l.code, num: l.num, aliases: l.aliases || [] })),
+  ...data.exits.map((x) => ({ key: 'x:' + x.key, g: 'exit', name: x.name, sub: x.sub, color: x.color || '#6b8fb3', code: '', num: '', aliases: [] })),
+];
+const itemBy = Object.fromEntries(ITEMS.map((it) => [it.key, it]));
 const opMeta = (key) => {
-  if (!key) return null;
-  if (key.startsWith('x:')) {
-    const x = exitBy[key.slice(2)];
-    return x && { name: x.name, sub: x.sub, color: '#e8ebf0', exit: true };
-  }
-  const l = lineBy[key];
-  return l && { name: l.name, sub: l.sub, color: l.color, exit: false };
+  const it = key && itemBy[key];
+  return it && { name: it.name, sub: it.sub, color: it.color, exit: it.g === 'exit' };
 };
-const shortSub = (s) => (s || '').replace(/\s*[\d・〜]+番(線|ホーム)$/, '');
-function renderPick(btn, key) {
-  const m = opMeta(key);
-  btn.classList.toggle('unset', !m);
-  btn.querySelector('.sq').style.background = m?.color || '';
-  btn.querySelector('b').textContent = m ? m.name + (m.sub && !m.exit ? '（' + shortSub(m.sub) + '）' : '') : 'タップで一覧';
+const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+function badge(it) {
+  const round = it.g === 'metro' || it.g === 'toei';
+  const plain = !it.code;
+  return `<span class="bd${round ? ' round' : ''}${plain ? ' plain' : ''}" style="--c:${it.color}">${it.code ? `<span>${esc(it.code)}</span><span>${esc(it.num)}</span>` : ''}</span>`;
 }
+// ひらがな・カタカナを同一視して部分一致
+const norm = (t) => String(t || '').toLowerCase().replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60)).replace(/[\s・（）()]/g, '');
+const matches = (it, q) => !q || [it.name, it.sub, it.code + it.num, ...it.aliases].some((t) => norm(t).includes(q));
+const COARSE = matchMedia('(pointer: coarse)').matches;
+const combos = {};
+function setupCombo(side) {
+  const input = $(side === 'from' ? '#fromInput' : '#toInput');
+  const list = document.createElement('div');
+  list.className = 'list';
+  list.id = side + 'List';
+  list.setAttribute('role', 'listbox');
+  list.hidden = true;
+  document.body.appendChild(list);
+  if (COARSE) { input.readOnly = true; input.setAttribute('inputmode', 'none'); }
+  let opts = [], active = -1;
+  function render(filter) {
+    const q = norm(filter);
+    list.innerHTML = '';
+    opts = [];
+    const cur = state[side], other = state[side === 'from' ? 'to' : 'from'];
+    for (const g of Object.keys(G_LABEL)) {
+      const its = ITEMS.filter((it) => it.g === g && matches(it, q));
+      if (!its.length) continue;
+      const h = document.createElement('h3');
+      h.textContent = G_LABEL[g];
+      list.appendChild(h);
+      for (const it of its) {
+        const o = document.createElement('div');
+        const dis = it.key === other || (g === 'exit' && other?.startsWith('x:'));
+        o.className = 'opt' + (it.key === cur ? ' cur' : '');
+        o.setAttribute('role', 'option');
+        o.dataset.key = it.key;
+        if (dis) o.setAttribute('aria-disabled', 'true');
+        o.innerHTML = `${badge(it)}<span class="t"><b>${esc(it.name)}</b><span>${esc(it.sub)}</span></span>`;
+        o.addEventListener('mousedown', (ev) => { ev.preventDefault(); if (!dis) choose(it.key); });
+        o.addEventListener('click', () => { if (!dis) choose(it.key); });
+        list.appendChild(o);
+        if (!dis) opts.push(o);
+      }
+    }
+    if (!opts.length) list.innerHTML = `<div class="empty">「${esc(filter)}」に一致する路線はありません</div>`;
+    active = opts.findIndex((o) => o.dataset.key === cur);
+    mark();
+  }
+  function mark() {
+    opts.forEach((o, i) => o.classList.toggle('active', i === active));
+    if (opts[active]) opts[active].scrollIntoView({ block: 'nearest' });
+  }
+  function place() {
+    const r = input.getBoundingClientRect();
+    const w = Math.min(Math.max(r.width + 40, 340), innerWidth - 16);
+    const left = Math.max(8, Math.min(r.left, innerWidth - w - 8));
+    list.style.left = left + 'px';
+    list.style.top = r.bottom + 4 + 'px';
+    list.style.width = w + 'px';
+    list.style.maxHeight = Math.max(200, Math.min(innerHeight * 0.62, innerHeight - r.bottom - 14)) + 'px';
+  }
+  function open(filter) {
+    for (const k in combos) if (k !== side) combos[k].close();
+    render(filter);
+    place();
+    list.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+  }
+  function close() { list.hidden = true; input.setAttribute('aria-expanded', 'false'); show(); }
+  function choose(key) { close(); input.blur(); setPick(side, key); }
+  function show() {
+    const it = itemBy[state[side]];
+    input.value = it ? it.name : '';
+    input.parentElement.querySelector('.bd').outerHTML = it ? badge(it).replace('class="bd', 'class="bd sel') : '<span class="bd sel none"></span>';
+  }
+  input.addEventListener('focus', () => { if (!COARSE) input.select(); open(''); });
+  input.addEventListener('click', () => { if (list.hidden) open(''); });
+  input.addEventListener('input', () => { open(input.value); active = opts.length ? 0 : -1; mark(); });
+  input.addEventListener('blur', () => setTimeout(() => { if (!list.hidden) close(); }, 150));
+  input.addEventListener('keydown', (ev) => {
+    if (list.hidden && (ev.key === 'ArrowDown' || ev.key === 'ArrowUp')) { open(''); ev.preventDefault(); return; }
+    if (ev.key === 'ArrowDown') { active = Math.min(opts.length - 1, active + 1); mark(); ev.preventDefault(); }
+    else if (ev.key === 'ArrowUp') { active = Math.max(0, active - 1); mark(); ev.preventDefault(); }
+    else if (ev.key === 'Enter' && !list.hidden && opts[active]) { ev.preventDefault(); choose(opts[active].dataset.key); }
+    else if (ev.key === 'Escape') { close(); input.blur(); }
+  });
+  addEventListener('resize', () => { if (!list.hidden) place(); });
+  combos[side] = { open, close, show, input };
+}
+setupCombo('from');
+setupCombo('to');
+document.addEventListener('pointerdown', (e) => {
+  if (e.target.closest('.list') || e.target.closest('.combo')) return;
+  for (const k in combos) combos[k].close();
+});
+
 function setPick(side, key) {
   state[side] = key;
-  renderPick(side === 'from' ? $('#fromBtn') : $('#toBtn'), key);
+  combos[side].show();
   $('#goBtn').disabled = !(state.from && state.to && state.from !== state.to);
   $('#err').textContent = '';
+  // 両方そろったら、その場で経路をプレビュー（再生はしない）
+  if (state.from && state.to && state.from !== state.to) go(false);
 }
-renderPick($('#fromBtn'), null);
-renderPick($('#toBtn'), null);
+combos.from.show();
+combos.to.show();
 $('#goBtn').disabled = true;
 
-const sheet = $('#sheet');
-function openSheet(side) {
-  $('#sheetTitle').textContent = side === 'from' ? '乗ってきた路線' : '乗り換える路線・行き先';
-  const body = $('#sheetBody');
-  body.innerHTML = '';
-  const groups = [];
-  for (const op of data.ops) {
-    const ls = data.lines.filter((l) => l.op === op.key);
-    if (ls.length) groups.push([op.name, ls.map((l) => [l.key, l.name, l.sub, l.color])]);
-  }
-  groups.push(['改札・出口', data.exits.map((x) => ['x:' + x.key, x.name, x.sub, '#e8ebf0'])]);
-  const cur = state[side], other = state[side === 'from' ? 'to' : 'from'];
-  for (const [title, items] of groups) {
-    const g = document.createElement('div');
-    g.className = 'grp';
-    g.innerHTML = '<h3></h3><div class="list"></div>';
-    g.querySelector('h3').textContent = title;
-    for (const [key, name, sub, color] of items) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'opt' + (key === cur ? ' sel' : '');
-      b.innerHTML = '<i class="sq"></i><span><b></b><small></small></span>';
-      b.querySelector('.sq').style.background = color;
-      b.querySelector('b').textContent = name;
-      b.querySelector('small').textContent = sub || '';
-      if (key === other || (key.startsWith('x:') && other?.startsWith('x:'))) b.disabled = true;
-      b.onclick = () => { setPick(side, key); sheet.hidden = true; };
-      g.querySelector('.list').appendChild(b);
-    }
-    body.appendChild(g);
-  }
-  sheet.hidden = false;
-}
-$('#fromBtn').onclick = () => openSheet('from');
-$('#toBtn').onclick = () => openSheet('to');
-$('#sheetClose').onclick = () => (sheet.hidden = true);
-sheet.querySelector('.sheet-bg').onclick = () => (sheet.hidden = true);
-$('#swapBtn').onclick = () => { const f = state.from; setPick('from', state.to); setPick('to', f); };
+$('#swapBtn').onclick = () => {
+  const f = state.from, t = state.to;
+  state.from = t; state.to = f;
+  combos.from.show(); combos.to.show();
+  if (state.from && state.to) go(false);
+};
 for (const b of document.querySelectorAll('#speedSeg button')) {
   b.onclick = () => {
     state.speed = +b.dataset.v;
     for (const x of document.querySelectorAll('#speedSeg button')) x.setAttribute('aria-pressed', x === b ? 'true' : 'false');
   };
 }
+const shortName = (k) => (itemBy[k]?.name || '').replace(/（.*?）/g, '');
 for (const [f, t] of data.presets || []) {
-  const a = opMeta(f), b = opMeta(t);
-  if (!a || !b) continue;
+  if (!itemBy[f] || !itemBy[t]) continue;
   const c = document.createElement('button');
   c.type = 'button';
-  c.textContent = `${a.name} → ${b.name}`;
-  c.onclick = () => { setPick('from', f); setPick('to', t); go(true); };
+  c.textContent = `${shortName(f)} → ${shortName(t)}`;
+  c.onclick = () => { state.from = f; state.to = t; combos.from.show(); combos.to.show(); $('#goBtn').disabled = false; go(true); };
   $('#presets').appendChild(c);
 }
-$('#controls').addEventListener('submit', (e) => { e.preventDefault(); go(true); });
+// 出発進行: プレビュー中のルートをそのまま再生
+$('#controls').addEventListener('submit', (e) => {
+  e.preventDefault();
+  if (!state.from || !state.to || state.from === state.to) {
+    $('#err').textContent = '乗ってきた路線と、乗り換える路線・行き先を選んでください。';
+    return;
+  }
+  if (state.routes.length && state.routesFor === state.from + '>' + state.to) startPov();
+  else go(true);
+});
 $('#replayBtn').onclick = () => startPov();
 $('#replayBtn2').onclick = () => startPov();
 $('#overviewBtn').onclick = () => { stopPov(); fitRoute(); };
 $('#overviewBtn2').onclick = () => { stopPov(); fitRoute(); };
 $('#menuBtn').onclick = () => { stopPov(); fitRoute(); };
+$('#closeBtn').onclick = () => resetToStart();
+$('#homeBtn').onclick = () => resetToStart();
+
+// 最初の画面に戻る（ルートを消して全体の模型へ）
+function resetToStart() {
+  stopPov();
+  state.routes = [];
+  state.sel = 0;
+  state.routesFor = null;
+  if (routeObj) { scene.remove(routeObj); routeObj.traverse((o) => o.geometry?.dispose()); routeObj = null; }
+  for (const L of labels) L.route = false;
+  $('#board').hidden = true;
+  $('#viewBtns').hidden = true;
+  document.body.classList.remove('routed');
+  history.replaceState(null, '', location.pathname + location.search);
+  setFocus(null);
+  flyTo(HOME_T.clone(), HOME_P.clone(), 900);
+  layoutUI();
+}
+
+// ---------------------------------------------------------------- 画面の配置（階ボタンが隠れないように）
+function layoutUI() {
+  const lv = $('#levels');
+  const c = $('#controls').getBoundingClientRect();
+  const mobile = innerWidth < 760;
+  lv.classList.remove('row');
+  lv.style.left = (mobile ? 8 : 14) + 'px';
+  lv.style.right = 'auto';
+  lv.style.bottom = 'auto';
+  lv.style.top = Math.round(c.bottom + (mobile ? 6 : 10)) + 'px';
+  if (mobile) { lv.classList.add('row'); lv.style.right = '8px'; return; }
+  // 縦に並べて入らないときは横並びに
+  const vb = $('#viewBtns');
+  const bottomLimit = (vb.hidden ? innerHeight - 24 : vb.getBoundingClientRect().top - 10);
+  if (lv.getBoundingClientRect().bottom > bottomLimit) { lv.classList.add('row'); lv.style.right = 'auto'; lv.style.maxWidth = c.width + 'px'; }
+}
+addEventListener('resize', layoutUI);
+if (window.ResizeObserver) new ResizeObserver(() => layoutUI()).observe($('#controls'));
 
 // ---------------------------------------------------------------- 経路
 function go(play) {
@@ -243,20 +356,21 @@ function go(play) {
   if (!rs.length) { $('#err').textContent = 'ルートが見つかりませんでした（地図データ不足の可能性があります）。'; return; }
   state.routes = rs;
   state.sel = 0;
+  state.routesFor = state.from + '>' + state.to;
   history.replaceState(null, '', '#' + encodeURIComponent(state.from) + '>' + encodeURIComponent(state.to));
   document.body.classList.add('routed');
   renderBoard();
   selectRoute(0, !play);
+  layoutUI();
   if (play) startPov();
 }
 function renderBoard() {
   const a = opMeta(state.from), b = opMeta(state.to);
   const r0 = state.routes[0];
   const sm = $('#summary');
-  sm.innerHTML = `<div class="ln"><span class="c1">■</span><span class="n1"></span> → <span class="c2">■</span><span class="n2"></span></div>
+  sm.innerHTML = `<div class="ln">${badge(itemBy[state.from])}<span class="n1"></span> → ${badge(itemBy[state.to])}<span class="n2"></span></div>
     <div><span class="big mono"></span>　<span class="meta tm"></span></div>
     <div class="meta cnt"></div>`;
-  sm.querySelector('.c1').style.color = a.color; sm.querySelector('.c2').style.color = b.color;
   sm.querySelector('.n1').textContent = a.name; sm.querySelector('.n2').textContent = b.name;
   sm.querySelector('.big').textContent = `約${Math.round(r0.dist / 10) * 10}m`;
   sm.querySelector('.tm').textContent = `徒歩の目安 約${Math.max(1, Math.round(r0.time / 60))}分`;
@@ -455,6 +569,7 @@ function stopPov() {
   bloom.strength = 0.7;
   renderer.toneMappingExposure = 1.25;
   setFocus(state.focus);
+  requestAnimationFrame(layoutUI);
 }
 function togglePause() {
   const pv = state.pov;
@@ -579,12 +694,13 @@ function loop(now) {
   updateLabels();
 }
 requestAnimationFrame(loop);
+layoutUI();
 $('#loading').style.opacity = 0;
 setTimeout(() => $('#loading').remove(), 450);
 
 const hash = decodeURIComponent(location.hash.slice(1));
 if (hash.includes('>')) {
   const [f, t] = hash.split('>');
-  if (opMeta(f) && opMeta(t)) { setPick('from', f); setPick('to', t); go(false); }
+  if (opMeta(f) && opMeta(t)) { setPick('from', f); setPick('to', t); }
 }
 window.__app = { state, data, camera, controls, scene, renderer, composer, bloom, go, setPick, startPov, stopPov, fitRoute, model, graph, selectRoute };

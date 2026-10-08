@@ -10,7 +10,7 @@ if (f && t) {
   if (!r) { console.log('NO ROUTE'); process.exit(1); }
   console.log(`${Math.round(r.dist)}m ${Math.round(r.time / 60)}min vert=${r.vertCount}`);
   for (const s of r.steps) console.log(' ', s.icon, s.text, s.sub || '', s.dist ? Math.round(s.dist) + 'm' : '');
-  console.log(' maneuvers:', r.man.map((m) => `${Math.round(m.s0)}:${m.text}`).join(' / '));
+  console.log(' segs:', r.segs.map((m) => `${Math.round(m.s0)}:${m.text}`).join(' / '));
   process.exit(0);
 }
 let fail = 0, n = 0;

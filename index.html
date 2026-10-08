@@ -27,14 +27,14 @@
   <form id="controls" class="panel" autocomplete="off">
     <div class="brand"><h1>新宿駅乗り換え3Dアプリ</h1><span>新宿駅 JY17 · 実地図データ模型</span></div>
     <div class="row pickrow">
-      <div class="field">
-        <label for="fromBtn">乗ってきた路線 ▾</label>
-        <button type="button" class="pick" id="fromBtn"><i class="sq"></i><b>タップで一覧</b></button>
+      <div class="field combo">
+        <label for="fromInput">乗ってきた路線 ▾</label>
+        <div class="cbox"><span class="bd sel none"></span><input id="fromInput" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="fromList" placeholder="タップで一覧・路線名で検索" autocomplete="off" spellcheck="false"></div>
       </div>
       <button type="button" class="iconbtn" id="swapBtn" aria-label="出発と到着を入れ替え">⇅</button>
-      <div class="field">
-        <label for="toBtn">乗り換える路線・行き先 ▾</label>
-        <button type="button" class="pick" id="toBtn"><i class="sq"></i><b>タップで一覧</b></button>
+      <div class="field combo">
+        <label for="toInput">乗り換える路線・行き先 ▾</label>
+        <div class="cbox"><span class="bd sel none"></span><input id="toInput" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="toList" placeholder="タップで一覧・路線名で検索" autocomplete="off" spellcheck="false"></div>
       </div>
       <button type="submit" id="goBtn">出発進行 ▶</button>
     </div>
@@ -50,7 +50,7 @@
   </form>
 
   <aside id="board" class="panel" aria-live="polite" hidden>
-    <h2>乗換ルート</h2>
+    <div class="bhead"><h2>乗換ルート</h2><button type="button" class="closebtn" id="closeBtn" aria-label="ルートを閉じて最初の画面へ">✕ 閉じる</button></div>
     <div id="summary"></div>
     <div id="ropts" class="ropts"></div>
     <details id="stepsBox">
@@ -63,6 +63,7 @@
 <div id="viewBtns" hidden>
   <button type="button" class="btn" id="replayBtn">もう一度</button>
   <button type="button" class="btn" id="overviewBtn">模型を見る</button>
+  <button type="button" class="btn" id="homeBtn">最初の画面へ</button>
 </div>
 
 <div id="levels" class="panel"></div>
@@ -88,15 +89,6 @@
     <div id="navDist" class="mono">0m</div>
   </div>
   <div id="mapWrap" class="panel"><canvas id="minimap" width="320" height="320"></canvas><span id="mapLv"></span></div>
-</div>
-
-<!-- 路線の一覧 -->
-<div id="sheet" hidden>
-  <div class="sheet-bg"></div>
-  <div class="sheet panel">
-    <header><b id="sheetTitle">路線を選ぶ</b><button type="button" class="iconbtn" id="sheetClose">✕</button></header>
-    <div id="sheetBody"></div>
-  </div>
 </div>
 
 <footer id="note">

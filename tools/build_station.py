@@ -913,8 +913,10 @@ out_gates = []
 for g in gates:
     g["name"] = C.FINAL_GATE_NAMES.get(g["name"], g["name"])
     gx, gy, gz, glv = vnodes[g["n"]]
-    for x, z, lv, rad, nm in C.GATE_NAME_AT:
+    for x, z, lv, rad, nm, *opk in C.GATE_NAME_AT:
         if abs(glv - lv) < 0.6 and math.hypot(gx - x, gz - z) < rad:
+            if opk and not (zone[g["n"]] & OPBIT[opk[0]]):
+                continue
             g["name"] = nm
     if g["n"] in remap:
         out_gates.append(dict(n=remap[g["n"]], name=g["name"]))
@@ -944,6 +946,8 @@ for key, name, sub, color, op, pls, *rest in C.LINES:
         print("line has no platform:", key)
         continue
     ln = dict(key=key, name=name, sub=sub, color=color, op=op, plats=ps)
+    g, code, num, aliases = C.LINE_META.get(key, ("jr", "", "", []))
+    ln.update(g=g, code=code, num=num, aliases=aliases)
     if rest:
         ln["arr"] = [pidx[p] for p in rest[0] if p in pidx]
     out_lines.append(ln)
@@ -1322,7 +1326,8 @@ out = dict(
     ops=[dict(key=k, name=n, bit=b) for k, n, b in C.OPS],
     nodes=out_nodes, nodeLv=out_lv, zone=out_zone, edges=out_edges, cost=out_cost,
     gates=out_gates, plats=out_plats, lines=out_lines,
-    exits=[dict(key=e["key"], name=e["name"], sub=e["sub"], n=remap[e["n"]]) for e in exits if e["n"] in remap],
+    exits=[dict(key=e["key"], name=e["name"], sub=e["sub"], n=remap[e["n"]], color=C.EXIT_COLOR.get(e["key"], "#6b8fb3"))
+           for e in exits if e["n"] in remap],
     presets=[list(p) for p in C.PRESETS],
     buildings=buildings, roads=roads, rails=rails, shops=shops,
     ename=out_ename, ein=out_ein, names=names_list, grid=grid_out, signs=signs, disp=out_disp,

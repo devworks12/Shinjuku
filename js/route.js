@@ -419,6 +419,10 @@ export class Graph {
     res.segs = merged;
     // 一覧
     steps.sort((a, b) => a.i - b.i);
+    for (let k = steps.length - 1; k > 0; k--) {
+      const a = steps[k - 1], b = steps[k];
+      if (a.icon === '↑' && b.icon === '↑' && a.text === b.text) { a.dist = (a.dist || 0) + (b.dist || 0); steps.splice(k, 1); }
+    }
     const startText = A.exit ? `${A.name}から出発` : `${A.name} ${platLabel(res.fromPlat)}`;
     steps.unshift({ icon: '●', text: startText, sub: A.exit ? '' : (A.line?.sub || '').replace(/\s*[\d・]+番(線|ホーム)$/, ''), i: 0, cls: 'start' });
     steps.push({ icon: '◎', text: endText, sub: B.exit ? (this.exits[B.line?.key]?.sub || '') : (B.line?.sub || '').replace(/\s*[\d・]+番(線|ホーム)$/, ''), i: path.length - 1, cls: 'end' });
