@@ -45,19 +45,31 @@ export class MapNav {
 
   // ---------------------------------------------------------------- 基本の操作
   // 画面上の点が指す、注視点の高さの水平面上の位置
+  // カメラの向き・行列を今の位置に合わせる（1フレームに何回も指の移動が来ても、古い行列で計算しないように）
+  _sync() {
+    this.camera.lookAt(this.target);
+    this.camera.updateMatrixWorld(true);
+  }
   hit(x, y, out = new THREE.Vector3()) {
+    this._sync();
     const r = this.dom.getBoundingClientRect();
     const ndc = new THREE.Vector2(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1);
     this._ray.setFromCamera(ndc, this.camera);
-    this._plane.set(UP, -this.target.y);
-    const d = this._ray.ray.direction;
-    // 地平線より上を指したときは、遠すぎない位置で止める
-    if (d.y > -0.05) { out.copy(this._ray.ray.origin).addScaledVector(new THREE.Vector3(d.x, 0, d.z).normalize(), this.camera.position.distanceTo(this.target) * 1.5); out.y = this.target.y; return out; }
-    return this._ray.ray.intersectPlane(this._plane, out) || out.copy(this.target);
+    const o = this._ray.ray.origin, d = this._ray.ray.direction;
+    // 注視点の高さの水平面との交点。地平線に近い向き・上向きのときは、一定の距離で止める（遠くへ飛ばないように）
+    const dist = this.camera.position.distanceTo(this.target);
+    const maxT = dist * 2.2;
+    let t = d.y < -1e-4 ? (this.target.y - o.y) / d.y : Infinity;
+    if (!(t > 0) || t > maxT) t = maxT;
+    out.copy(o).addScaledVector(d, t);
+    out.y = this.target.y;
+    return out;
   }
   translate(dv) { this.target.add(dv); this.camera.position.add(dv); }
   // 点 P を中心に拡大（scale > 1 で近づく）
   zoomAbout(P, scale) {
+    if (!isFinite(scale) || scale <= 0) return;
+    scale = THREE.MathUtils.clamp(scale, 0.5, 2);
     const dist = this.camera.position.distanceTo(this.target);
     const nd = THREE.MathUtils.clamp(dist / scale, this.minDistance, this.maxDistance);
     const k = nd / dist;
@@ -83,6 +95,10 @@ export class MapNav {
 
   // ---------------------------------------------------------------- 毎フレーム
   update(dt = 1 / 60) {
+    // 万一の数値の破綻から戻す
+    if (![this.camera.position.x, this.camera.position.y, this.camera.position.z, this.target.x, this.target.y, this.target.z].every(Number.isFinite)) {
+      this.target.set(0, 0, 0); this.camera.position.set(-300, 350, 380); this.vel.set(0, 0, 0); this.zoomAnim = null;
+    }
     if (this.vel.lengthSq() > 1e-4 && this.pointers.size === 0) {
       this.translate(this.vel.clone().multiplyScalar(dt));
       this.vel.multiplyScalar(Math.exp(-dt * 5));
@@ -112,6 +128,8 @@ export class MapNav {
   // ---------------------------------------------------------------- 入力
   _down(e) {
     if (!this.enabled) return;
+    // 指を離したイベントを取りこぼした古い指が残っていたら捨てる（1本目の指が新しく触れた＝他の指は無い）
+    if (e.isPrimary) this.pointers.clear();
     this.dom.setPointerCapture?.(e.pointerId);
     this.vel.set(0, 0, 0);
     this.zoomAnim = null;
@@ -140,6 +158,9 @@ export class MapNav {
       const h = this.hit(p.x, p.y);
       const dv = this.grab.clone().sub(h);
       dv.y = 0;
+      // 1回の移動量に上限（地平線付近で指が滑っても、カメラが飛ばないように）
+      const lim = this.camera.position.distanceTo(this.target) * 0.25;
+      if (dv.length() > lim) dv.setLength(lim);
       this.translate(dv);
       const now = performance.now();
       this.samples.push({ t: now, v: dv.clone() });
@@ -177,6 +198,8 @@ export class MapNav {
     // ピンチ: 指の中心の移動 → 平行移動、間隔 → 拡大縮小、ひねり → 回転（はっきりひねったときだけ）
     const h0 = this.hit(mPrev.x, mPrev.y), h1 = this.hit(mNow.x, mNow.y);
     const dv = h0.sub(h1); dv.y = 0;
+    const lim = this.camera.position.distanceTo(this.target) * 0.25;
+    if (dv.length() > lim) dv.setLength(lim);
     this.translate(dv);
     const P = this.hit(mNow.x, mNow.y);
     if (dPrev > 0) this.zoomAbout(P, dNow / dPrev);
@@ -189,7 +212,7 @@ export class MapNav {
       if (tot < -Math.PI) tot += 2 * Math.PI;
       if (Math.abs(tot) > 0.26) g.rotOn = true; // 約15度ひねったら回転を有効に
     }
-    if (g.rotOn) this.rotateAbout(P, -dAng);
+    if (g.rotOn) this.rotateAbout(P, dAng); // 指をひねった向きに地図が回る
   }
 
   _up(e) {

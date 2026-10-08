@@ -64,7 +64,7 @@ camera.position.copy(HOME_P);
 // 地図アプリと同じ操作（1本指=移動、2本指=拡大・回転、2本指上下=傾き）。詳しくは js/nav.js
 let fly = null;
 const controls = new MapNav(camera, canvas, {
-  minDistance: 12, maxDistance: 1600, maxPolarAngle: Math.PI * 0.47,
+  minDistance: 12, maxDistance: 1100, maxPolarAngle: Math.PI * 0.42,
   onStart: () => { fly = null; hideHint(); },
 });
 controls.target.copy(HOME_T);
